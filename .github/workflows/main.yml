@@ -1,4 +1,4 @@
-name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz，无猜测）
+name: RK3328 自动编译 - 官方补丁版
 on:
   workflow_dispatch:
     inputs:
@@ -42,7 +42,7 @@ jobs:
       DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的自定义主设备树
       DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 缓存KEY
-      # 官方标准路径（解压后真实路径，不猜，只验证）
+      # 官方标准路径（解压后真实路径，已匹配你的日志）
       LINUX_SRC_DIR: ./sources/linux/linux-rockchip
       OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip
       PATCH_DIR: projects/Rockchip/patches/linux  # 官方补丁目录
@@ -103,56 +103,56 @@ jobs:
           tar -xf "${{ env.LINUX_TAR }}" -C "${{ env.LINUX_SRC_DIR }}" --strip-components=1
           echo "✅ 解压完成！"
 
-      - name: 🔴 核心一步：打印所有RK3328设备树文件（不猜，只看真实文件）
+      - name: 🔴 核心一步：打印所有RK3328设备树文件（确认真实文件）
         run: |
-          echo "📋 解压后，RK3328所有设备树文件（真实存在的文件）："
-          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts  # 列出所有rk3328开头的dts
-          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi  # 列出所有rk3328开头的dtsi
-          # 动态获取官方主设备树文件名（取第一个rk3328开头的dts，适配所有情况）
+          echo "📋 解压后，RK3328所有设备树文件（真实存在）："
+          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts
+          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi
+          # 动态获取官方主设备树（匹配你的日志：rk3328-a1.dts）
           OFFICIAL_MAIN_DTS=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts | head -1)
           OFFICIAL_MAIN_DTSI=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi | head -1)
           echo "✅ 自动获取官方主设备树：$OFFICIAL_MAIN_DTS"
           echo "✅ 自动获取官方设备树头文件：$OFFICIAL_MAIN_DTSI"
-          # 保存到环境变量，后续步骤复用（不硬写任何文件名）
           echo "OFFICIAL_MAIN_DTS=$OFFICIAL_MAIN_DTS" >> $GITHUB_ENV
           echo "OFFICIAL_MAIN_DTSI=$OFFICIAL_MAIN_DTSI" >> $GITHUB_ENV
 
       - name: 🔴 最终校验设备树（确保文件真实存在）
         run: |
           if [ -z "${{ env.OFFICIAL_MAIN_DTS }}" ] || [ -z "${{ env.OFFICIAL_MAIN_DTSI }}" ]; then
-            echo "❌ 未找到RK3328设备树文件！请查看上面的文件列表"
+            echo "❌ 未找到RK3328设备树文件！"
             exit 1
           fi
-          echo "✅ 设备树校验通过，将基于真实文件备份+打补丁"
+          echo "✅ 设备树校验通过，开始生成补丁"
 
-      - name: 🔴 备份官方设备树（用真实文件名，不猜）
+      - name: 🔴 备份官方设备树（用真实文件名，无硬写）
         run: |
           mkdir -p backup/devicetree
-          # 备份所有rk3328开头的设备树（不遗漏，不硬写）
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts backup/devicetree/
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi backup/devicetree/
           echo "✅ 备份官方RK3328所有设备树完成"
 
-      - name: 🔴 生成官方标准补丁（适配真实设备树文件名，官方推荐）
+      - name: 🔴 生成官方标准补丁（修复Git身份报错，核心修改）
         run: |
           # 校验自定义设备树是否存在
           if [ ! -f "${{ env.DTS_MAIN }}" ] || [ ! -f "${{ env.DTS_INCLUDE }}" ]; then
-            echo "❌ 未找到自定义设备树！请确认文件在仓库根目录"
+            echo "❌ 未找到自定义设备树！"
             exit 1
           fi
 
-          # 临时目录生成补丁（不修改官方源码目录，符合官方流程）
           mkdir -p tmp-patch
           # 复制官方真实设备树到临时目录
           cp "${{ env.OFFICIAL_MAIN_DTS }}" tmp-patch/
           cp "${{ env.OFFICIAL_MAIN_DTSI }}" tmp-patch/
-          # 替换为自定义设备树（保持文件名和官方一致，确保补丁生效）
+          # 替换为自定义设备树（保持官方文件名，确保补丁生效）
           cp "${{ env.DTS_MAIN }}" "${{ env.OFFICIAL_MAIN_DTS }}"
           cp "${{ env.DTS_INCLUDE }}" "${{ env.OFFICIAL_MAIN_DTSI }}"
 
-          # 生成官方兼容的补丁（带完整提交信息，编译时自动应用）
+          # 🔧 新增：临时配置Git身份（解决runner无身份报错，仅在临时仓库生效）
           cd tmp-patch
           git init
+          git config user.name "GitHub Actions"  # 临时用户名（任意即可）
+          git config user.email "actions@github.com"  # 临时邮箱（任意即可）
+          # 生成补丁（官方兼容格式）
           git add .
           git commit -m "RK3328: Update device tree for L1Pro 1296MHz"
           git format-patch -o ../${{ env.PATCH_DIR }} HEAD^
