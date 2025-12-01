@@ -1,4 +1,4 @@
-name: RK3328 自动编译
+name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz，最终无坑版）
 on:
   workflow_dispatch:
     inputs:
@@ -52,6 +52,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # 🔴 新增1：前置超级清理（优先级最高，释放30+GB，解决磁盘不足核心）
+      - name: 前置清理-释放系统空间（编译前必做）
+        run: |
+          echo "📊 清理前磁盘占用："
+          df -h
+          # 1. 删除GitHub Runner预装的无用软件（编译LibreELEC完全用不到）
+          sudo apt-get remove -y --purge dotnet-sdk-* android-sdk-* code ghc haskell* mono-*
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          # 2. 清理系统缓存和临时文件
+          sudo rm -rf /var/cache/apt/* /var/log/* /tmp/*
+          sudo rm -rf /home/runner/.nuget /home/runner/.cache /home/runner/.local
+          # 3. 清理Runner日志缓存（避免日志占满磁盘，对应你之前的报错）
+          sudo rm -rf /home/runner/actions-runner/_diag/*
+          # 4. 清理工具缓存目录（超大，可释放10+GB）
+          sudo rm -rf /opt/hostedtoolcache/*
+          echo "📊 清理后磁盘占用："
+          df -h
 
       - name: 安装官方完整编译依赖（补全+验证，核心修复）
         run: |
@@ -120,6 +139,17 @@ jobs:
           mkdir -p "${{ env.LINUX_SRC_DIR }}"
           tar -xf "${{ env.LINUX_TAR }}" -C "${{ env.LINUX_SRC_DIR }}" --strip-components=1
           echo "✅ 解压完成！"
+
+      # 🔴 新增2：解压后清理（释放内核压缩包占用，避免冗余）
+      - name: 解压后清理-删除内核压缩包
+        run: |
+          echo "🔧 删除已解压的内核压缩包（释放空间）"
+          if [ -f "${{ env.LINUX_TAR }}" ]; then
+            rm -rf "${{ env.LINUX_TAR }}"
+            echo "✅ 内核压缩包删除完成"
+          fi
+          # 清理源码目录下的临时解压文件
+          rm -rf ./sources/*/*.tar.xz ./sources/*/*.zip 2>/dev/null
 
       - name: 🔴 核心一步：打印所有RK3328设备树文件（确认真实文件）
         run: |
@@ -203,7 +233,7 @@ jobs:
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
-            du -sh "$IMAGE            du -sh "$IMAGE_FILE"
+            du -sh "$IMAGE_FILE"
           else
             echo "❌ 未找到镜像，查看build.log排查"
             exit 1
@@ -221,3 +251,26 @@ jobs:
             backup/devicetree/
           retention-days: 30
           if-no-files-found: error
+
+      # 🔴 新增3：编译后即时清理（释放中间文件，避免日志/临时文件堆积）
+      - name: 编译后清理-释放编译空间
+        run: |
+          echo "🔧 编译完成，清理中间产物和临时文件"
+          # 1. 清理编译中间目录
+          rm -rf build.* target/*/.cache target/*/tmp 2>/dev/null
+          # 2. 清理临时编译目录
+          rm -rf "${{ env.TEMP_DIR }}"
+          # 3. 清理备份和补丁目录（产物已上传，无需保留）
+          rm -rf backup tmp-patch ${{ env.PATCH_DIR }} 2>/dev/null
+          # 4. 清理Git临时文件
+          git clean -fdx
+          echo "📊 清理后最终磁盘占用："
+          df -h
+
+      # 🔴 新增4：终极兜底清理（防止日志占满，适配你之前的报错）
+      - name: 兜底清理-Runner日志和缓存（避免下次编译报错）
+        if: always()  # 无论编译成功/失败，都执行
+        run: |
+          sudo rm -rf /home/runner/actions-runner/_diag/*
+          sudo rm -rf /tmp/* /var/tmp/*
+          echo "✅ 兜底清理完成，避免下次编译磁盘不足"
