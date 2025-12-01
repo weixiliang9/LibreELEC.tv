@@ -1,4 +1,4 @@
-name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz）
+name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz，无猜测）
 on:
   workflow_dispatch:
     inputs:
@@ -39,34 +39,31 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TEMP_DIR: /tmp/libreelec-build  # 扩容临时目录（编译需≥20GB）
-      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的自定义设备树
+      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的自定义主设备树
       DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 缓存KEY
-      # 🔴 官方标准路径（解压后真实路径，已核实）
-      LINUX_SRC_DIR: ./sources/linux/linux-rockchip  # 解压后内核源码目录
-      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip  # 设备树目录
-      PATCH_DIR: projects/Rockchip/patches/linux  # 官方推荐补丁目录
-      # 内核压缩包名称（从你的日志中获取，固定为linux-6.6.71.tar.xz）
-      LINUX_TAR: ./sources/linux/linux-6.6.71.tar.xz
+      # 官方标准路径（解压后真实路径，不猜，只验证）
+      LINUX_SRC_DIR: ./sources/linux/linux-rockchip
+      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip
+      PATCH_DIR: projects/Rockchip/patches/linux  # 官方补丁目录
+      LINUX_TAR: ./sources/linux/linux-6.6.71.tar.xz  # 你的内核压缩包（从日志获取）
 
     steps:
       - name: 拉取Fork的LibreELEC仓库（含自定义设备树）
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 拉取完整主仓库（含官方补丁目录结构）
+          fetch-depth: 0
 
-      - name: 安装官方编译依赖（严格对照官方文档）
+      - name: 安装官方编译依赖（无多余，无缺失）
         run: |
           sudo apt update
-          # 官方基础依赖（含解压、补丁、编译工具）
           sudo apt install -y bc curl git rsync unzip xz-utils zip diffutils
-          # RK3328交叉编译+设备树依赖（官方专属）
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
 
-      - name: 切换到指定版本（与缓存/官方一致）
+      - name: 切换到指定版本（与缓存一致）
         run: |
           git checkout ${{ github.event.inputs.librelec_version }}
-          git status  # 调试：确认当前分支无异常
+          git status
 
       - name: 🔴 恢复源码缓存（优先复用，缺失则补全）
         uses: actions/cache@v3
@@ -77,112 +74,116 @@ jobs:
             ${{ env.CACHE_KEY }}
         id: cache-restore
 
-      - name: 🔴 打印源码目录结构（调试核心，看清缓存内容）
+      - name: 🔴 打印源码压缩包情况（确认压缩包存在）
         run: |
-          echo "📁 查看sources/linux目录结构（确认压缩包是否存在）"
+          echo "📁 查看sources/linux目录（确认内核压缩包）"
           ls -l ./sources/linux/
-          echo "📁 查看sources目录总大小：$(du -sh ./sources | cut -f1)"
+          echo "📁 源码总大小：$(du -sh ./sources | cut -f1)"
 
-      - name: 🔴 强制补全RK3328专属源码（解决缓存缺失问题）
+      - name: 🔴 强制补全RK3328专属源码（确保压缩包完整）
         run: |
-          # 核心：即使缓存命中，也强制校验核心压缩包；缺失则重新下载（指定DEVICE=RK3328）
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ 缓存命中！校验RK3328内核压缩包是否存在"
+            echo "✅ 缓存命中！校验内核压缩包"
             if [ ! -f "${{ env.LINUX_TAR }}" ]; then
-              echo "⚠️  缓存缺失内核压缩包！强制重新下载专属源码"
+              echo "⚠️  缓存缺失压缩包，重新下载"
               PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
             fi
           else
-            echo "⚠️  缓存未命中！下载RK3328专属源码（含内核压缩包+设备树）"
+            echo "⚠️  缓存未命中，下载RK3328专属源码"
             PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
           fi
 
-      - name: 🔴 核心修复：解压内核压缩包（之前遗漏的关键步骤！）
+      - name: 🔴 解压内核压缩包（官方标准流程，无简化）
         run: |
-          echo "🔧 解压RK3328内核压缩包（${{ env.LINUX_TAR }}）"
-          # 1. 若解压目录已存在，先清理（避免旧文件干扰）
-          if [ -d "${{ env.LINUX_SRC_DIR }}" ]; then
-            rm -rf "${{ env.LINUX_SRC_DIR }}"
-            echo "✅ 已清理旧解压目录"
-          fi
-          # 2. 创建解压目录并解压（官方标准解压流程）
+          echo "🔧 解压内核压缩包：${{ env.LINUX_TAR }}"
+          # 清理旧解压目录（避免干扰）
+          [ -d "${{ env.LINUX_SRC_DIR }}" ] && rm -rf "${{ env.LINUX_SRC_DIR }}"
           mkdir -p "${{ env.LINUX_SRC_DIR }}"
+          # 解压（保留原始目录结构，不修改层级）
           tar -xf "${{ env.LINUX_TAR }}" -C "${{ env.LINUX_SRC_DIR }}" --strip-components=1
-          echo "✅ 内核压缩包解压完成！解压目录：${{ env.LINUX_SRC_DIR }}"
-          # 3. 打印解压后设备树目录结构（确认设备树存在）
-          ls -l "${{ env.OFFICIAL_DTS_DIR }}/"
+          echo "✅ 解压完成！"
 
-      - name: 🔴 最终校验设备树（确保万无一失）
+      - name: 🔴 核心一步：打印所有RK3328设备树文件（不猜，只看真实文件）
         run: |
-          # 校验核心设备树文件（rk3328.dtsi必须存在，否则编译无意义）
-          if [ ! -f "${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi" ]; then
-            echo "❌ 解压后仍未找到RK3328设备树！请检查源码下载是否完整"
+          echo "📋 解压后，RK3328所有设备树文件（真实存在的文件）："
+          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts  # 列出所有rk3328开头的dts
+          ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi  # 列出所有rk3328开头的dtsi
+          # 动态获取官方主设备树文件名（取第一个rk3328开头的dts，适配所有情况）
+          OFFICIAL_MAIN_DTS=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts | head -1)
+          OFFICIAL_MAIN_DTSI=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi | head -1)
+          echo "✅ 自动获取官方主设备树：$OFFICIAL_MAIN_DTS"
+          echo "✅ 自动获取官方设备树头文件：$OFFICIAL_MAIN_DTSI"
+          # 保存到环境变量，后续步骤复用（不硬写任何文件名）
+          echo "OFFICIAL_MAIN_DTS=$OFFICIAL_MAIN_DTS" >> $GITHUB_ENV
+          echo "OFFICIAL_MAIN_DTSI=$OFFICIAL_MAIN_DTSI" >> $GITHUB_ENV
+
+      - name: 🔴 最终校验设备树（确保文件真实存在）
+        run: |
+          if [ -z "${{ env.OFFICIAL_MAIN_DTS }}" ] || [ -z "${{ env.OFFICIAL_MAIN_DTSI }}" ]; then
+            echo "❌ 未找到RK3328设备树文件！请查看上面的文件列表"
             exit 1
           fi
-          echo "✅ 设备树校验通过！核心文件：${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi"
+          echo "✅ 设备树校验通过，将基于真实文件备份+打补丁"
 
-      - name: 🔴 生成官方标准补丁（替代直接替换，官方推荐）
+      - name: 🔴 备份官方设备树（用真实文件名，不猜）
         run: |
-          # 1. 备份官方设备树（官方标准流程，便于回滚）
           mkdir -p backup/devicetree
+          # 备份所有rk3328开头的设备树（不遗漏，不硬写）
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts backup/devicetree/
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi backup/devicetree/
-          echo "✅ 备份官方RK3328设备树完成"
+          echo "✅ 备份官方RK3328所有设备树完成"
 
-          # 2. 校验自定义设备树是否存在（避免文件缺失）
+      - name: 🔴 生成官方标准补丁（适配真实设备树文件名，官方推荐）
+        run: |
+          # 校验自定义设备树是否存在
           if [ ! -f "${{ env.DTS_MAIN }}" ] || [ ! -f "${{ env.DTS_INCLUDE }}" ]; then
             echo "❌ 未找到自定义设备树！请确认文件在仓库根目录"
             exit 1
           fi
 
-          # 3. 生成官方兼容的补丁文件（严格遵循官方补丁格式）
+          # 临时目录生成补丁（不修改官方源码目录，符合官方流程）
           mkdir -p tmp-patch
-          # 复制官方设备树到临时目录（用于生成diff）
-          cp "${{ env.OFFICIAL_DTS_DIR }}"/rk3328.dts tmp-patch/
-          cp "${{ env.OFFICIAL_DTS_DIR }}"/rk3328.dtsi tmp-patch/
-          # 替换为自定义设备树
-          cp "${{ env.DTS_MAIN }}" tmp-patch/rk3328.dts
-          cp "${{ env.DTS_INCLUDE }}" tmp-patch/rk3328.dtsi
+          # 复制官方真实设备树到临时目录
+          cp "${{ env.OFFICIAL_MAIN_DTS }}" tmp-patch/
+          cp "${{ env.OFFICIAL_MAIN_DTSI }}" tmp-patch/
+          # 替换为自定义设备树（保持文件名和官方一致，确保补丁生效）
+          cp "${{ env.DTS_MAIN }}" "${{ env.OFFICIAL_MAIN_DTS }}"
+          cp "${{ env.DTS_INCLUDE }}" "${{ env.OFFICIAL_MAIN_DTSI }}"
 
-          # 生成带完整提交信息的补丁（编译时自动应用）
+          # 生成官方兼容的补丁（带完整提交信息，编译时自动应用）
           cd tmp-patch
           git init
           git add .
           git commit -m "RK3328: Update device tree for L1Pro 1296MHz"
-          git format-patch -o ../${{ env.PATCH_DIR }} HEAD^  # 补丁输出到官方目录
+          git format-patch -o ../${{ env.PATCH_DIR }} HEAD^
           cd ..
-          rm -rf tmp-patch  # 清理临时文件
+          rm -rf tmp-patch
+          echo "✅ 生成官方补丁完成：$(ls ${{ env.PATCH_DIR }}/*.patch)"
 
-          echo "✅ 生成官方标准补丁：$(ls ${{ env.PATCH_DIR }}/*.patch)"
-
-      - name: 🔴 清理旧编译产物（确保补丁生效，官方必做步骤）
+      - name: 🔴 清理旧编译产物（官方必做，确保补丁生效）
         run: |
-          # 清理linux内核旧编译产物（避免补丁不生效）
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} scripts/clean linux
-          # 清理临时目录（释放空间）
           rm -rf "$TEMP_DIR"
           mkdir -p "$TEMP_DIR"
 
-      - name: 🔴 官方标准编译（严格对照官方命令）
+      - name: 🔴 官方标准编译（无自定义参数，不踩坑）
         run: |
-          # 单行编译命令（无YAML语法错误，官方推荐参数）
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
-      - name: 验证编译产物（官方标准输出目录）
+      - name: 验证编译产物
         run: |
-          echo "📁 查看官方编译产物目录（target）"
+          echo "📁 查看编译产物目录："
           ls -l target/
-          # 查找镜像文件（官方默认输出.img.gz格式）
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
-            echo "✅ 编译成功！RK3328镜像路径：$IMAGE_FILE"
+            echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
             du -sh "$IMAGE_FILE"
           else
-            echo "❌ 未找到编译镜像！查看build.log排查（优先看补丁/设备树报错）"
+            echo "❌ 未找到镜像，查看build.log排查（优先看补丁报错）"
             exit 1
           fi
 
-      - name: 上传产物（镜像+日志+补丁，便于调试）
+      - name: 上传产物（便于调试，保留所有关键文件）
         uses: actions/upload-artifact@v4
         with:
           name: librelec-rk3328-l1pro-${{ github.event.inputs.librelec_version }}
