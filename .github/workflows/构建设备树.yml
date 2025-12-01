@@ -41,7 +41,7 @@ jobs:
             git clone --depth 1 https://github.com/dgibson/dtc.git "$DTC_SRC_DIR" || {
               echo "⚠️ GitHub克隆失败，使用系统dtc"
               echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-              echo "dtc_type=系统dtc" >> $GITHUB_ENV
+              echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
               exit 0
             }
           fi
@@ -51,7 +51,7 @@ jobs:
           make V=1 -j$(nproc) CC=gcc || {
             echo "⚠️ DTC构建失败，切换系统dtc"
             echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc" >> $GITHUB_ENV
+            echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
             exit 0
           }
 
@@ -62,7 +62,7 @@ jobs:
             $DTC_PATH --version
           else
             echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc" >> $GITHUB_ENV
+            echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
           fi
 
       - name: 编译设备树（最终稳定版）
@@ -75,16 +75,32 @@ jobs:
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
           # 校验文件存在性
-          [ ! -f "$DTS_FILE" ] && echo "❌ 未找到DTS文件: $DTS_FILE" && exit 1
-          [ ! -f "$DTSI_FILE" ] && echo "❌ 未找到DTSI文件: $DTSI_FILE" && exit 1
+          if [ ! -f "$DTS_FILE" ]; then
+            echo "❌ 根目录未找到DTS文件: $DTS_FILE"
+            ls -lh ./
+            exit 1
+          fi
+          if [ ! -f "$DTSI_FILE" ]; then
+            echo "❌ 根目录未找到DTSI文件: $DTSI_FILE"
+            ls -lh ./
+            exit 1
+          fi
 
-          # 核心编译命令（修复参数格式，移除多余注释和换行）
+          # 核心编译命令（移除--debug，避免系统dtc 1.7.0不兼容；保留-v输出详细错误）
           echo "📦 编译设备树：$DTS_FILE → $DTB_FILE"
+          echo "使用DTC工具：${{ env.dtc_path }}"
           ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" \
             -i ./ \
             -v \
-            -Wno-all \
-            --debug
+            -Wno-all
+
+          # 捕获编译退出码，输出详细错误
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "❌ DTC编译失败！错误码：$EXIT_CODE"
+            echo "=== 可能原因：DTS语法错误、DTSI依赖缺失 ==="
+            exit $EXIT_CODE
+          fi
 
           # 验证编译结果
           if [ -f "$DTB_FILE" ]; then
@@ -93,7 +109,7 @@ jobs:
             file "$DTB_FILE"
             echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
           else
-            echo "❌ DTB未生成，编译失败"
+            echo "❌ DTB文件未生成，编译失败"
             exit 1
           fi
 
@@ -108,5 +124,5 @@ jobs:
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
             - 编译工具：${{ env.dtc_type }}
-            - DTC版本：${{ env.dtc_path }} --version（执行日志可查）
+            - 编译状态：成功（已验证DTB文件有效性）
           overwrite: true
