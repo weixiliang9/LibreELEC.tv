@@ -37,7 +37,6 @@ jobs:
           set -x
           DTC_SRC_DIR="./dtc-src"
           if [ ! -d "$DTC_SRC_DIR" ]; then
-            echo "📥 下载独立DTC源码"
             git clone --depth 1 https://github.com/dgibson/dtc.git "$DTC_SRC_DIR" || {
               echo "⚠️ GitHub克隆失败，使用系统dtc"
               echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
@@ -46,7 +45,6 @@ jobs:
             }
           fi
 
-          echo "🔨 构建独立DTC工具"
           cd "$DTC_SRC_DIR"
           make V=1 -j$(nproc) CC=gcc || {
             echo "⚠️ DTC构建失败，切换系统dtc"
@@ -65,7 +63,7 @@ jobs:
             echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
           fi
 
-      - name: 编译设备树（最终稳定版）
+      - name: 编译设备树（错误明细输出版）
         id: compile-dts
         run: |
           set -x
@@ -74,42 +72,44 @@ jobs:
           DTSI_FILE="rk3328.dtsi"
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
-          # 校验文件存在性
-          if [ ! -f "$DTS_FILE" ]; then
-            echo "❌ 根目录未找到DTS文件: $DTS_FILE"
-            ls -lh ./
-            exit 1
-          fi
-          if [ ! -f "$DTSI_FILE" ]; then
-            echo "❌ 根目录未找到DTSI文件: $DTSI_FILE"
-            ls -lh ./
-            exit 1
-          fi
+          # 1. 再次确认文件存在（输出详细路径和权限）
+          echo "=== 验证文件存在性 ==="
+          ls -lh "$DTS_FILE" 2>/dev/null || { echo "❌ DTS文件不存在: $DTS_FILE"; exit 1; }
+          ls -lh "$DTSI_FILE" 2>/dev/null || { echo "❌ DTSI文件不存在: $DTSI_FILE"; exit 1; }
+          echo "文件权限：$(ls -l "$DTS_FILE" | awk '{print $1}')"
+          echo "文件大小：$(du -sh "$DTS_FILE" | awk '{print $1}')"
 
-          # 核心编译命令（移除--debug，避免系统dtc 1.7.0不兼容；保留-v输出详细错误）
-          echo "📦 编译设备树：$DTS_FILE → $DTB_FILE"
-          echo "使用DTC工具：${{ env.dtc_path }}"
+          # 2. 输出DTS文件前20行（快速排查明显语法错误，如缺少分号、括号不匹配）
+          echo -e "\n=== DTS文件前20行内容 ==="
+          head -n 20 "$DTS_FILE"
+
+          # 3. 核心编译命令（增加--strict严格模式，输出完整错误明细）
+          echo -e "\n=== 开始编译（输出完整错误日志） ==="
           ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" \
             -i ./ \
             -v \
-            -Wno-all
+            --strict  # 强制输出所有语法问题，不忽略任何错误
 
-          # 捕获编译退出码，输出详细错误
+          # 4. 捕获退出码，明确错误原因
           EXIT_CODE=$?
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "❌ DTC编译失败！错误码：$EXIT_CODE"
-            echo "=== 可能原因：DTS语法错误、DTSI依赖缺失 ==="
+            echo -e "\n❌ 编译失败！错误码：$EXIT_CODE"
+            echo "=== 错误原因分析 ==="
+            echo "1. 最可能：DTS/DTSI 存在语法错误（如缺少分号、括号不匹配、节点名错误）"
+            echo "2. 次可能：DTSI 中引用的节点/宏未定义（需检查 #include 路径和内容）"
+            echo "3. 参考：本地执行以下命令验证并修正："
+            echo "   dtc -I dts -O dtb -o test.dtb rk3328-l1pro-1296mhz.dts -i ./ -v --strict"
             exit $EXIT_CODE
           fi
 
-          # 验证编译结果
+          # 5. 验证DTB产物
           if [ -f "$DTB_FILE" ]; then
-            echo "✅ 编译成功！"
+            echo -e "\n✅ 编译成功！"
             ls -lh "$DTB_FILE"
             file "$DTB_FILE"
             echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
           else
-            echo "❌ DTB文件未生成，编译失败"
+            echo -e "\n❌ DTB文件未生成"
             exit 1
           fi
 
@@ -124,5 +124,5 @@ jobs:
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
             - 编译工具：${{ env.dtc_type }}
-            - 编译状态：成功（已验证DTB文件有效性）
+            - 验证状态：DTB文件有效（可直接用于设备）
           overwrite: true
