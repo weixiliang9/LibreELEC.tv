@@ -25,55 +25,57 @@ jobs:
       - name: Install Full Dependencies
         run: |
           set -x
-          # 换阿里云源，加速依赖安装
           sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           sudo apt-get update -y
-          # 安装dtc构建+DTS编译必需依赖
           sudo apt-get install -y build-essential bison flex python3 python3-pip \
             git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev patchutils \
-            device-tree-compiler # 系统dtc备用
+            device-tree-compiler
 
       - name: Build DTC from LibreELEC 12.0 Kernel (6.6版本)
         id: build-dtc
         run: |
           set -x
-          # 下载LibreELEC 12.0 对应的6.6内核源码（Rockchip适配版本）
           KERNEL_DIR="./linux-libreelec-6.6"
           if [ ! -d "$KERNEL_DIR" ]; then
             echo "📥 下载LibreELEC 12.0 6.6内核源码"
             git clone --depth 1 --branch libreelec-6.6.y https://github.com/LibreELEC/linux.git "$KERNEL_DIR"
-            # 应用Rockchip RK3328专属补丁（确保dtc兼容设备树语法）
             curl -sSL https://raw.githubusercontent.com/LibreELEC/LibreELEC.tv/libreelec-12.0/projects/Rockchip/patches/linux/linux-6.6-rockchip.patch | patch -d "$KERNEL_DIR" -p1 || echo "⚠️ 非关键补丁应用失败，继续构建"
           fi
 
-          # 独立构建dtc工具（仅编译dtc，速度快）
           echo "🔨 构建6.6内核dtc工具"
           make -C "$KERNEL_DIR/scripts/dtc" V=1 -j$(nproc)
           DTC_PATH="$KERNEL_DIR/scripts/dtc/dtc"
 
-          # 容错：dtc构建失败则使用系统dtc
+          # 定义dtc类型变量（避免三元运算符）
+          if [ "$DTC_PATH" = "/usr/bin/dtc" ]; then
+            DTC_TYPE="系统dtc"
+          else
+            DTC_TYPE="LibreELEC 6.6内核dtc"
+          fi
+
+          # 容错：dtc构建失败则使用系统dtc并更新类型
           if [ ! -x "$DTC_PATH" ]; then
             echo "⚠️ 内核源码dtc构建失败，切换到系统dtc"
             DTC_PATH=$(which dtc)
+            DTC_TYPE="系统dtc"
             dtc --version
           fi
 
           echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
-          echo "✅ 最终使用的dtc工具: $DTC_PATH"
+          echo "dtc_type=$DTC_TYPE" >> $GITHUB_ENV  # 存入环境变量供后续使用
+          echo "✅ 最终使用的dtc工具: $DTC_PATH ($DTC_TYPE)"
 
       - name: Compile Fixed DTS (RK3328-L1Pro)
         id: compile-dts
         run: |
           set -x
-          # 固定根目录下的目标文件
           DTS_FILE="rk3328-l1pro-1296mhz.dts"
           DTSI_FILE="rk3328.dtsi"
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
-          # 严格校验输入文件（避免路径错误）
           if [ ! -f "$DTS_FILE" ]; then
             echo "❌ 根目录未找到DTS文件: $DTS_FILE"
-            ls -lh ./ # 输出根目录文件列表，方便排查
+            ls -lh ./
             exit 1
           fi
           if [ ! -f "$DTSI_FILE" ]; then
@@ -82,7 +84,6 @@ jobs:
             exit 1
           fi
 
-          # 编译设备树（指定根目录为包含路径，兼容LibreELEC 6.6内核语法）
           echo "📦 编译设备树: $DTS_FILE → $DTB_FILE"
           ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" \
             -i ./ \
@@ -91,16 +92,14 @@ jobs:
             -Wno-avoid_unnecessary_addr_size \
             -Wno-graph_child_address
 
-          # 验证编译结果
           if [ ! -f "$DTB_FILE" ]; then
             echo "❌ DTB文件未生成，编译失败"
             exit 1
           fi
 
-          # 输出文件信息，确认有效性
           echo "✅ 编译成功！"
           ls -lh "$DTB_FILE"
-          file "$DTB_FILE" # 验证文件类型为Device Tree Blob
+          file "$DTB_FILE"
           echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
 
       - name: Upload DTB to Release
@@ -113,6 +112,6 @@ jobs:
             ## RK3328-L1Pro 设备树编译产物（LibreELEC 12.0）
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
-            - 编译工具：${{ env.dtc_path == '/usr/bin/dtc' ? '系统dtc' : 'LibreELEC 6.6内核dtc' }}
+            - 编译工具：${{ env.dtc_type }}  # 引用提前定义的环境变量
             - 内核版本：6.6（LibreELEC 12.0 原生适配）
           overwrite: true
