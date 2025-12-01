@@ -1,0 +1,123 @@
+name: Compile RK3328 DTS to DTB & Upload Release
+
+# 手动触发，无需输入参数（DTS文件名固定）
+on:
+  workflow_dispatch:
+    # 可选：允许手动指定Release版本号（默认用commit-sha）
+    inputs:
+      release-tag:
+        description: 'Release tag name (e.g., v1.0.0, default: commit-sha)'
+        required: false
+        default: ''
+
+jobs:
+  compile-and-release:
+    runs-on: ubuntu-latest
+    name: Compile DTS → DTB → Upload Release
+    timeout-minutes: 45  # 适配缓存恢复+dtc构建耗时
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 确保子模块完整（即使有缓存，避免缺失依赖）
+          fetch-depth: 0
+
+      - name: Restore cached sources (LibreELEC 12.0 RK3328)
+        uses: actions/cache/restore@v3
+        with:
+          # 缓存key与你提前缓存的一致
+          key: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
+          # LibreELEC常见源码/构建缓存路径（根据实际缓存内容调整，确保覆盖所有依赖包）
+          path: |
+            ./sources
+            ./build
+            ./projects
+            ./toolchain
+          fail-on-cache-miss: true  # 缓存未命中时直接失败（避免重复下载，符合你的缓存设计）
+          restore-keys: |
+            librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
+
+      - name: Install required dependencies
+        run: |
+          sudo apt-get update -y
+          # 仅补充缓存中可能缺失的系统依赖（dtc构建必需）
+          sudo apt-get install -y build-essential bison flex python3 python3-pip
+
+      - name: Build DTC from LibreELEC source (RK3328)
+        id: build-dtc
+        run: |
+          # 精准查找RK3328对应的Linux内核目录（LibreELEC 12.0 Rockchip结构）
+          LINUX_DIR=$(find ./projects/Rockchip -path "*/linux-*" -type d | head -n 1)
+          if [ -z "$LINUX_DIR" ]; then
+            echo "Error: RK3328 Linux kernel directory not found in projects/Rockchip/"
+            exit 1
+          fi
+          echo "✅ Found RK3328 Linux dir: $LINUX_DIR"
+
+          # 构建dtc（复用缓存的源码，速度更快）
+          make -C "$LINUX_DIR" scripts/dtc -j$(nproc)
+          DTC_PATH="$LINUX_DIR/scripts/dtc/dtc"
+
+          # 验证dtc可用性
+          if [ ! -x "$DTC_PATH" ]; then
+            echo "Error: DTC build failed, executable not found"
+            exit 1
+          fi
+          echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
+          echo "✅ DTC built successfully: $DTC_PATH"
+
+      - name: Compile fixed DTS (rk3328-l1pro-1296mhz.dts)
+        id: compile-dts
+        run: |
+          # 固定DTS文件名和路径（根目录）
+          DTS_FILE="rk3328-l1pro-1296mhz.dts"
+          DTSI_FILE="rk3328.dtsi"
+          DTB_FILE="${DTS_FILE%.dts}.dtb"
+
+          # 验证DTS和DTSI文件存在
+          if [ ! -f "$DTS_FILE" ]; then
+            echo "Error: DTS file not found in repo root: $DTS_FILE"
+            exit 1
+          fi
+          if [ ! -f "$DTSI_FILE" ]; then
+            echo "Error: DTSI header file not found in repo root: $DTSI_FILE"
+            exit 1
+          fi
+          echo "✅ Found DTS: $DTS_FILE, DTSI: $DTSI_FILE"
+
+          # 编译（指定根目录为包含路径，确保DTS能找到同目录的DTSI）
+          echo "Compiling $DTS_FILE → $DTB_FILE..."
+          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./
+
+          # 验证编译结果
+          if [ ! -f "$DTB_FILE" ]; then
+            echo "Error: DTB compilation failed, file not generated"
+            exit 1
+          fi
+          ls -lh "$DTB_FILE"
+          echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
+          echo "✅ DTB compiled successfully: $DTB_FILE"
+
+      - name: Create & Upload Release with DTB
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 仓库默认密钥，无需额外配置
+        with:
+          # Release标签：优先使用输入，否则用commit-sha（确保唯一）
+          tag_name: ${{ github.event.inputs.release-tag != '' && github.event.inputs.release-tag || github.sha }}
+          # Release标题（含设备名和commit信息）
+          name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag != '' && github.event.inputs.release-tag || github.sha }}
+          # Release描述
+          body: |
+            ## 设备树编译产物（LibreELEC 12.0 RK3328）
+            - DTS源码：`rk3328-l1pro-1296mhz.dts`
+            - 依赖头文件：`rk3328.dtsi`
+            - 编译工具：LibreELEC内核自带DTC（从源码构建）
+            - 对应Commit：${{ github.sha }}
+          # 上传编译后的DTB文件
+          files: ${{ env.dtb_file }}
+          # 可选：设置为预发布（根据需求调整）
+          prerelease: false
+          # 可选：覆盖已有相同标签的Release（避免重复标签报错）
+          overwrite: true
