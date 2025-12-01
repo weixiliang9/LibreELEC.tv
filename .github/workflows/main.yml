@@ -129,7 +129,7 @@ jobs:
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi backup/devicetree/
           echo "✅ 备份官方RK3328所有设备树完成"
 
-      - name: 🔴 生成官方标准补丁（修复Git命令漏洞，核心修改）
+      - name: 🔴 生成官方标准补丁（无Git报错，已验证）
         run: |
           # 校验自定义设备树是否存在
           if [ ! -f "${{ env.DTS_MAIN }}" ] || [ ! -f "${{ env.DTS_INCLUDE }}" ]; then
@@ -145,17 +145,16 @@ jobs:
           cp "${{ env.DTS_MAIN }}" "${{ env.OFFICIAL_MAIN_DTS }}"
           cp "${{ env.DTS_INCLUDE }}" "${{ env.OFFICIAL_MAIN_DTSI }}"
 
-          # 🔧 修复Git命令：全新仓库（1个commit）用--root生成补丁，替代HEAD^
+          # 生成官方兼容补丁（适配全新Git仓库，无HEAD^报错）
           cd tmp-patch
           git init
-          git config user.name "GitHub Actions"  # 临时Git身份（必配）
+          git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add .
           git commit -m "RK3328: Update device tree for L1Pro 1296MHz"
-          # 核心修复：用--root生成补丁（适配只有1个commit的全新仓库）
           git format-patch --root -o ../${{ env.PATCH_DIR }}
           cd ..
-          rm -rf tmp-patch  # 清理临时文件
+          rm -rf tmp-patch
 
           # 验证补丁是否生成成功
           PATCH_FILE=$(ls ${{ env.PATCH_DIR }}/*.patch | head -1)
@@ -167,15 +166,17 @@ jobs:
             exit 1
           fi
 
-      - name: 🔴 清理旧编译产物（官方必做，确保补丁生效）
+      - name: 🔴 清理旧编译产物（修复DEVICE空值报错，核心修改）
         run: |
-          PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} scripts/clean linux
+          # 🔧 核心修复：直接硬写DEVICE=RK3328（避免参数传递为空，适配官方脚本）
+          PROJECT=${{ github.event.inputs.project }} DEVICE=RK3328 ARCH=${{ github.event.inputs.arch }} scripts/clean linux
+          # 清理临时目录（释放空间）
           rm -rf "$TEMP_DIR"
           mkdir -p "$TEMP_DIR"
 
       - name: 🔴 官方标准编译（无自定义参数，不踩坑）
         run: |
-          PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
+          PROJECT=${{ github.event.inputs.project }} DEVICE=RK3328 ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
       - name: 验证编译产物
         run: |
