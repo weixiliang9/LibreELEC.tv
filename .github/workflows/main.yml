@@ -54,11 +54,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 安装官方编译依赖（无多余，无缺失）
+      - name: 安装官方完整编译依赖（补全所有缺失依赖，核心修改）
         run: |
           sudo apt update
+          # 1. 基础编译依赖（之前已安装，保留）
           sudo apt install -y bc curl git rsync unzip xz-utils zip diffutils
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
+          # 2. 补全报错缺失的依赖（对照官方报错清单，一个不落）
+          sudo apt install -y xfonts-utils  # 提供mkfontdir、mkfontscale、bdftopcf
+          sudo apt install -y rdfind        # 提供rdfind
+          sudo apt install -y libparse-yapp-perl  # 提供perl::Parse::Yapp::Driver
+          sudo apt install -y gperf         # 提供gperf
+          sudo apt install -y libxslt1.1    # 提供xsltproc（Ubuntu官方包名，非xsltproc）
+          sudo apt install -y libxml-parser-perl  # 提供perl::XML::Parser
+          sudo apt install -y patchutils    # 提供lsdiff
+          sudo apt install -y lzop          # 提供lzop
+          echo "✅ 所有官方编译依赖安装完成"
 
       - name: 切换到指定版本（与缓存一致）
         run: |
@@ -122,6 +133,8 @@ jobs:
           fi
           echo "✅ 设备树校验通过，开始生成补丁"
 
+      - name补丁"
+
       - name: 🔴 备份官方设备树（用真实文件名，无硬写）
         run: |
           mkdir -p backup/devicetree
@@ -166,11 +179,9 @@ jobs:
             exit 1
           fi
 
-      - name: 🔴 清理旧编译产物（修复DEVICE空值报错，核心修改）
+      - name: 🔴 清理旧编译产物（已修复DEVICE空值报错）
         run: |
-          # 🔧 核心修复：直接硬写DEVICE=RK3328（避免参数传递为空，适配官方脚本）
           PROJECT=${{ github.event.inputs.project }} DEVICE=RK3328 ARCH=${{ github.event.inputs.arch }} scripts/clean linux
-          # 清理临时目录（释放空间）
           rm -rf "$TEMP_DIR"
           mkdir -p "$TEMP_DIR"
 
@@ -187,7 +198,7 @@ jobs:
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
             du -sh "$IMAGE_FILE"
           else
-            echo "❌ 未找到镜像，查看build.log排查（优先看补丁报错）"
+            echo "❌ 未找到镜像，查看build.log排查（优先看补丁/设备树报错）"
             exit 1
           fi
 
