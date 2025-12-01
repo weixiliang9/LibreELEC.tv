@@ -1,0 +1,30 @@
+name: 极简编译DTS到DTB
+on: workflow_dispatch
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装dtc（直接用系统版，最快）
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+
+      - name: 编译设备树（强制输出所有错误）
+        run: |
+          # 固定文件（根目录）
+          DTS="rk3328-l1pro-1296mhz.dts"
+          DTSI="rk3328.dtsi"
+          
+          # 先验证文件存在（输出根目录所有文件）
+          echo "=== 根目录文件列表 ==="
+          ls -lh ./
+          
+          # 验证DTS/DTSI存在
+          [ ! -f "$DTS" ] && echo "❌ 找不到DTS: $DTS" && exit 1
+          [ ! -f "$DTSI" ] && echo "❌ 找不到DTSI: $DTSI" && exit 1
+          
+          # 强制输出详细编译日志（必须看这部分）
+          echo "=== 开始编译（错误直接显示） ==="
+          dtc -I dts -O dtb -o out.dtb "$DTS" -i ./ -v --strict
