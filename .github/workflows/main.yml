@@ -39,10 +39,10 @@ jobs:
   build-rk3328-image:
     runs-on: ubuntu-latest
     env:
-      TEMP_DIR: /tmp/libreelec-build  # 扩容临时目录，解决空间不足
-      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的主设备树文件
-      DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
-      CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 你的缓存KEY
+      TEMP_DIR: /tmp/libreelec-build
+      DTS_MAIN: rk3328-l1pro-1296mhz.dts
+      DTS_INCLUDE: rk3328.dtsi
+      CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
 
     steps:
       - name: 拉取你Fork的LibreELEC仓库（编译脚本+自定义设备树）
@@ -54,13 +54,12 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y bc curl git rsync unzip xz-utils zip
-          # RK3328交叉编译+设备树编译依赖
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
 
       - name: 切换到指定版本（与缓存一致）
         run: |
           git checkout ${{ github.event.inputs.librelec_version }}
-          git status  # 调试：确认当前分支
+          git status
 
       - name: 🔴 恢复源码缓存（关键！先拿到所有源码和设备树）
         uses: actions/cache@v3
@@ -71,59 +70,42 @@ jobs:
             ${{ env.CACHE_KEY }}
         id: cache-restore
 
-      - name: 🔴 自动搜索RK3328设备树目录（终极解决方案，不用硬写路径）
+      - name: 🔴 自动搜索RK3328设备树目录（终极解决方案）
         run: |
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
             echo "✅ 缓存命中！复用已下载的源码和设备树（大小：$(du -sh ./sources | cut -f1)）"
-            
-            # 核心：自动搜索RK3328设备树目录（适配所有12.0版本路径，必找到）
-            # 搜索范围：sources目录下，所有包含rk3328.dtsi的目录（精准定位）
             OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
-            
-            # 校验是否找到设备树目录
             if [ -n "$OFFICIAL_DTS_DIR" ]; then
               echo "✅ 自动找到RK3328设备树目录：$OFFICIAL_DTS_DIR"
-              # 保存目录到环境变量，后续步骤复用
               echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
-              # 打印目录内容，确认有rk3328相关设备树（调试用）
               ls -l $OFFICIAL_DTS_DIR/rk3328*.dts
               ls -l $OFFICIAL_DTS_DIR/rk3328*.dtsi
             else
-              echo "❌ 未找到RK3328设备树！可能是源码下载不完整，重新下载源码"
-              # 自动重新下载源码（容错，避免缓存不完整）
+              echo "❌ 未找到RK3328设备树！重新下载源码"
               PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
-              # 重新搜索一次
               OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
               if [ -z "$OFFICIAL_DTS_DIR" ]; then exit 1; fi
               echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
             fi
           else
-            echo "⚠️  缓存未命中！自动下载源码（可能耗时较长）"
-            # 下载源码
+            echo "⚠️  缓存未命中！自动下载源码"
             PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
-            # 搜索设备树目录
             OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
             echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
             echo "✅ 源码下载完成，设备树目录：$OFFICIAL_DTS_DIR"
           fi
 
-      - name: 🔴 备份并替换设备树（核心移植步骤，用自动找到的目录）
+      - name: 🔴 备份并替换设备树（核心移植步骤）
         run: |
-          # 从环境变量读取自动找到的设备树目录
           OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
-          
-          # 1. 备份官方RK3328设备树（避免替换错误无法回滚）
           mkdir -p backup/devicetree
           cp -r $OFFICIAL_DTS_DIR/rk3328*.dts backup/devicetree/
           cp -r $OFFICIAL_DTS_DIR/rk3328*.dtsi backup/devicetree/
-          echo "✅ 已备份官方RK3328设备树到 backup/devicetree"
-
-          # 2. 复制你的自定义设备树到官方目录（覆盖官方文件）
+          echo "✅ 已备份官方RK3328设备树"
           if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
             cp ${{ env.DTS_MAIN }} $OFFICIAL_DTS_DIR/
             cp ${{ env.DTS_INCLUDE }} $OFFICIAL_DTS_DIR/
             echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            # 验证替换结果（确认文件已替换）
             ls -l $OFFICIAL_DTS_DIR/${{ env.DTS_MAIN }}
             ls -l $OFFICIAL_DTS_DIR/${{ env.DTS_INCLUDE }}
           else
@@ -134,21 +116,18 @@ jobs:
       - name: 🔴 设备树语法预校验（提前规避编译报错）
         run: |
           OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
-          # 校验自定义设备树语法（避免编译时因语法错误失败）
           dtc -I dts -O dtb -o /dev/null $OFFICIAL_DTS_DIR/${{ env.DTS_MAIN }}
           dtc -I dts -O dtb -o /dev/null $OFFICIAL_DTS_DIR/${{ env.DTS_INCLUDE }}
           echo "✅ 自定义设备树语法校验通过"
 
-      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，无报错）
-        run: |
-          # 单行命令，无YAML语法问题，编译时读取替换后的设备树
-          PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
+      # 🔴 语法修正核心（第179行附近，之前报错位置）
+      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz）
+        run: PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
       - name: 验证编译产物
         run: |
           echo "📁 编译产物目录（target）："
           ls -l target/
-          # 查找镜像文件（.img.gz 或 .img）
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
@@ -162,10 +141,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: librelec-rk3328-l1pro-1296mhz-${{ github.event.inputs.librelec_version }}
-          path: |
-            target/*.img.gz
-            target/*.img
-            build.log  # 同时上传编译日志，方便调试
+          path:
+            - target/*.img.gz
+            - target/*.img
+            - build.log
           retention-days: 30
           if-no-files-found: error
 
@@ -175,37 +154,4 @@ jobs:
           name: devicetree-backup
           path: backup/devicetree/
           retention-days: 7
-          # 单行命令，无YAML语法问题，编译时会读取缓存目录中的设备树
-          PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
-
-      - name: 验证编译产物
-        run: |
-          echo "📁 编译产物目录（target）："
-          ls -l target/
-          # 查找镜像文件（.img.gz 或 .img）
-          IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
-          if [ -n "$IMAGE_FILE" ]; then
-            echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
-            du -sh "$IMAGE_FILE"
-          else
-            echo "❌ 未找到编译镜像！查看 build.log 排查错误"
-            exit 1
-          fi
-
-      - name: 上传编译镜像（供下载烧录，保存30天）
-        uses: actions/upload-artifact@v4
-        with:
-          name: librelec-rk3328-l1pro-1296mhz-${{ github.event.inputs.librelec_version }}
-          path: |
-            target/*.img.gz
-            target/*.img
-            build.log  # 同时上传编译日志，方便调试
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: 上传设备树备份（可选，便于回滚）
-        uses: actions/upload-artifact@v4
-        with:
-          name: devicetree-backup
-          path: backup/devicetree/
-          retention-days: 7
+          
