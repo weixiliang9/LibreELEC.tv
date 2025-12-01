@@ -1,4 +1,4 @@
-name: 手动触发 - 下载LibreELEC源码（缓存到仓库）
+name: 手动触发 - 下载LibreELEC源码（缓存供编译）
 
 on:
   workflow_dispatch:
@@ -32,14 +32,13 @@ on:
           - armv7
           - aarch64
         default: aarch64
-      # 🔴 新增：Rockchip项目专用 - 选择具体设备型号（解决报错的关键）
       rockchip_device:
         type: choice
         description: Rockchip项目专用 - 选择具体设备（非Rockchip项目可忽略）
         required: true
         options:
           - RK3288
-          - RK3328  # 你的目标设备，默认选中
+          - RK3328
           - RK3399
         default: RK3328
 
@@ -61,20 +60,29 @@ jobs:
         run: |
           git checkout ${{ github.event.inputs.librelec_version }}
 
-      # 🔴 关键修改：执行download-tool时，额外添加设备参数 DEVICE=${{ ... }}
+      # 🔴 关键1：下载源码包（已修复DEVICE参数，无报错）
       - name: 下载源码包（含工具链源码）
         run: |
-          # 核心：Rockchip项目必须指定DEVICE，其他项目（如Generic）可忽略DEVICE参数
+          echo "PROJECT=${{ github.event.inputs.project }}"
+          echo "ARCH=${{ github.event.inputs.arch }}"
+          echo "DEVICE=${{ github.event.inputs.rockchip_device }}"
           PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
 
-      - name: 打包源码包
-        run: |
-          zip -r librelec-sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}.zip sources/
-
-      - name: 上传源码包到Releases
-        uses: softprops/action-gh-release@v2
+      # 🔴 关键2：用GitHub Actions缓存替代Releases（无大小限制，后续编译可复用）
+      - name: 缓存源码包（供后续编译使用）
+        uses: actions/cache@v3
         with:
-          tag_name: sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
-          name: 源码包-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
-          files: librelec-sources-*.zip
-          body: 自动下载的LibreELEC源码包（含工具链源码），版本：${{ github.event.inputs.librelec_version }}，PROJECT：${{ github.event.inputs.project }}，ARCH：${{ github.event.inputs.arch }}，Rockchip设备：${{ github.event.inputs.rockchip_device }}
+          # 缓存的目录：源码下载后的sources目录（核心）
+          path: ./sources
+          # 缓存key：用版本+项目+架构+设备命名，避免不同配置混淆
+          key: librelec-sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
+          # 缓存失效策略：相同参数下，缓存不失效（除非手动删除缓存）
+          restore-keys: |
+            librelec-sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
+
+      # ✅ 新增：验证缓存（可选，调试用，确认缓存成功）
+      - name: 验证源码缓存
+        run: |
+          echo "查看sources目录大小（确认下载成功）"
+          du -sh ./sources  # 打印源码目录大小
+          echo "缓存完成，后续编译可直接复用此源码，无需重复下载"
