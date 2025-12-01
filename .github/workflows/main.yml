@@ -134,8 +134,6 @@ jobs:
           fi
           echo "✅ 设备树校验通过，开始生成补丁"
 
-      - name补丁"
-
       - name: 🔴 备份官方设备树（用真实文件名，无硬写）
         run: |
           mkdir -p backup/devicetree
