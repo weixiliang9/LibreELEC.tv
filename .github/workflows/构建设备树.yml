@@ -1,4 +1,4 @@
-name: 编译DTS到DTB并上传Release
+name: 编译DTS到DTB并上传Release（LibreELEC 12.0 兼容）
 on:
   workflow_dispatch:
     inputs:
@@ -16,45 +16,35 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装dtc（兼容版）
+      - name: 安装依赖+下载LibreELEC 6.6内核dtc源码
         run: |
-          sudo apt-get update && sudo apt-get install -y device-tree-compiler
-          dtc --version || { echo "❌ dtc安装失败"; exit 1; }
+          # 安装构建依赖
+          sudo apt-get update && sudo apt-get install -y git make gcc bison flex
+          # 下载LibreELEC 12.0 6.6内核的dtc源码（确保语法兼容）
+          git clone --depth 1 --branch linux-6.6.y https://github.com/LibreELEC/linux.git le-linux
+          cd le-linux/scripts/dtc
+          # 构建dtc（LibreELEC原生版本，兼容RK3328设备树）
+          make -j$(nproc)
+          echo "dtc_path=$(pwd)/dtc" >> $GITHUB_ENV
 
-      - name: 编译设备树（强制错误输出）
+      - name: 编译设备树（LibreELEC原生dtc）
         run: |
           DTS="rk3328-l1pro-1296mhz.dts"
           DTB="${DTS%.dts}.dtb"
           
-          # 1. 再次确认文件存在
-          echo "=== 验证文件 ==="
-          ls -lh "$DTS" && ls -lh "rk3328.dtsi"
-          echo "✅ 文件验证通过"
-
-          # 2. 核心修复：增加--warn-no-unit_address_vs_reg + 重定向所有输出
-          echo "=== 开始编译（输出所有错误/警告） ==="
-          # 重定向stdout和stderr到日志，确保不遗漏任何信息
-          dtc -I dts -O dtb -o "$DTB" "$DTS" -i ./ \
-            -v \
-            --strict \
-            --warn-no-unit_address_vs_reg 2>&1 | tee dtc-compile.log
-          COMPILE_EXIT=$?
-
-          # 3. 强制输出编译日志（关键！）
-          echo -e "\n=== DTC编译完整日志 ==="
-          cat dtc-compile.log
-
-          # 4. 校验结果
-          if [ $COMPILE_EXIT -ne 0 ]; then
-            echo "❌ 编译失败！dtc退出码: $COMPILE_EXIT"
-            exit 1
-          fi
+          echo "=== 使用LibreELEC 6.6内核dtc编译 ==="
+          ${{ env.dtc_path }} --version
+          
+          # 核心编译（输出详细日志，LibreELEC dtc会暴露语法问题）
+          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB" "$DTS" -i ./ -v --strict
+          
+          # 强制校验产物
           if [ ! -f "$DTB" ]; then
-            echo "❌ 未生成DTB文件！查看上面的编译日志找语法错误"
+            echo "❌ 编译失败！输出DTS前50行供排查："
+            head -n 50 "$DTS"
             exit 1
           fi
-
-          # 5. 确认产物有效
+          
           echo "✅ 编译成功！"
           ls -lh "$DTB"
           file "$DTB"
@@ -65,10 +55,10 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.release-tag || github.sha }}
           name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag || github.sha }}
-          files: ${{ env.dtb_file }}
+          files: ${{ env.dtc_file }}
           body: |
-            ## RK3328-L1Pro 设备树编译产物
-            - 编译工具：系统dtc 1.7.0
+            ## RK3328-L1Pro 设备树编译产物（LibreELEC 12.0 原生兼容）
+            - 编译工具：LibreELEC 6.6内核dtc
             - DTS源码：rk3328-l1pro-1296mhz.dts
             - 依赖头文件：rk3328.dtsi
           overwrite: true
