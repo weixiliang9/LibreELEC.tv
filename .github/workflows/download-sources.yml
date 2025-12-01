@@ -46,7 +46,8 @@ jobs:
       - name: 拉取LibreELEC仓库源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 拉取所有历史版本，方便切换tag/分支
+          fetch-depth: 1  # 拉取所有历史版本，方便切换tag/分支
+          path: LibreELEC.tv
 
       # 步骤2：安装下载源码所需的依赖（对应文档中的依赖命令）
       - name: 安装依赖包
