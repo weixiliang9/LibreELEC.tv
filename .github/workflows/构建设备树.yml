@@ -37,8 +37,17 @@ jobs:
           set -x
           KERNEL_DIR="./linux-libreelec-6.6"
           if [ ! -d "$KERNEL_DIR" ]; then
-            echo "📥 下载LibreELEC 12.0 6.6内核源码"
-            git clone --depth 1 --branch libreelec-6.6.y https://github.com/LibreELEC/linux.git "$KERNEL_DIR"
+            echo "📥 下载LibreELEC 12.0 6.6内核源码（修正分支名）"
+            # 关键修复：分支名改为 linux-6.6.y（LibreELEC 内核分支统一命名规范）
+            git clone --depth 1 --branch linux-6.6.y https://github.com/LibreELEC/linux.git "$KERNEL_DIR" || {
+              echo "⚠️ GitHub克隆失败，尝试Gitee镜像"
+              # 备用镜像：国内Gitee，避免网络波动
+              git clone --depth 1 --branch linux-6.6.y https://gitee.com/mirrors/LibreELEC-linux.git "$KERNEL_DIR" || {
+                echo "❌ 所有镜像克隆失败"
+                exit 1
+              }
+            }
+            # 应用Rockchip RK3328补丁（兼容LibreELEC 12.0）
             curl -sSL https://raw.githubusercontent.com/LibreELEC/LibreELEC.tv/libreelec-12.0/projects/Rockchip/patches/linux/linux-6.6-rockchip.patch | patch -d "$KERNEL_DIR" -p1 || echo "⚠️ 非关键补丁应用失败，继续构建"
           fi
 
@@ -46,14 +55,14 @@ jobs:
           make -C "$KERNEL_DIR/scripts/dtc" V=1 -j$(nproc)
           DTC_PATH="$KERNEL_DIR/scripts/dtc/dtc"
 
-          # 定义dtc类型变量（避免三元运算符）
+          # 定义dtc类型变量
           if [ "$DTC_PATH" = "/usr/bin/dtc" ]; then
             DTC_TYPE="系统dtc"
           else
             DTC_TYPE="LibreELEC 6.6内核dtc"
           fi
 
-          # 容错：dtc构建失败则使用系统dtc并更新类型
+          # 容错：dtc构建失败则使用系统dtc
           if [ ! -x "$DTC_PATH" ]; then
             echo "⚠️ 内核源码dtc构建失败，切换到系统dtc"
             DTC_PATH=$(which dtc)
@@ -62,7 +71,7 @@ jobs:
           fi
 
           echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
-          echo "dtc_type=$DTC_TYPE" >> $GITHUB_ENV  # 存入环境变量供后续使用
+          echo "dtc_type=$DTC_TYPE" >> $GITHUB_ENV
           echo "✅ 最终使用的dtc工具: $DTC_PATH ($DTC_TYPE)"
 
       - name: Compile Fixed DTS (RK3328-L1Pro)
@@ -112,6 +121,6 @@ jobs:
             ## RK3328-L1Pro 设备树编译产物（LibreELEC 12.0）
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
-            - 编译工具：${{ env.dtc_type }}  # 引用提前定义的环境变量
+            - 编译工具：${{ env.dtc_type }}
             - 内核版本：6.6（LibreELEC 12.0 原生适配）
           overwrite: true
