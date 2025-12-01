@@ -1,5 +1,4 @@
 name: RK3328 自动编译
-
 on:
   workflow_dispatch:
     inputs:
@@ -40,14 +39,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TEMP_DIR: /tmp/libreelec-build  # 扩容临时目录（编译需≥20GB）
-      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的自定义主设备树
-      DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
+      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 自定义主设备树
+      DTS_INCLUDE: rk3328.dtsi            # 设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 缓存KEY
-      # 官方标准路径（已匹配你的日志：rk3328-a1.dts）
-      LINUX_SRC_DIR: ./sources/linux/linux-rockchip
-      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip
+      LINUX_SRC_DIR: ./sources/linux/linux-rockchip  # 内核源码目录
+      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip  # 设备树目录
       PATCH_DIR: projects/Rockchip/patches/linux  # 官方补丁目录
-      LINUX_TAR: ./sources/linux/linux-6.6.71.tar.xz  # 你的内核压缩包
+      LINUX_TAR: ./sources/linux/linux-6.6.71.tar.xz  # 内核压缩包
 
     steps:
       - name: 拉取Fork的LibreELEC仓库（含自定义设备树）
@@ -55,22 +53,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 安装官方完整编译依赖（补全所有缺失依赖，核心修改）
+      - name: 安装官方完整编译依赖（补全+验证，核心修复）
         run: |
           sudo apt update
-          # 1. 基础编译依赖（之前已安装，保留）
+          # 1. 基础编译依赖（保留）
           sudo apt install -y bc curl git rsync unzip xz-utils zip diffutils
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
-          # 2. 补全报错缺失的依赖（对照官方报错清单，一个不落）
-          sudo apt install -y xfonts-utils  # 提供mkfontdir、mkfontscale、bdftopcf
-          sudo apt install -y rdfind        # 提供rdfind
-          sudo apt install -y libparse-yapp-perl  # 提供perl::Parse::Yapp::Driver
-          sudo apt install -y gperf         # 提供gperf
-          sudo apt install -y libxslt1.1    # 提供xsltproc（Ubuntu官方包名，非xsltproc）
-          sudo apt install -y libxml-parser-perl  # 提供perl::XML::Parser
-          sudo apt install -y patchutils    # 提供lsdiff
-          sudo apt install -y lzop          # 提供lzop
-          echo "✅ 所有官方编译依赖安装完成"
+          # 2. 补全报错缺失依赖（一一对应官方清单，重点优化xsltproc）
+          sudo apt install -y xfonts-utils
+          sudo apt install -y rdfind
+          sudo apt install -y libparse-yapp-perl
+          sudo apt install -y gperf
+          sudo apt install -y libxslt1.1 xsltproc  # 🔧 重点：显式安装xsltproc（即使重复，确保识别）
+          sudo apt install -y libxml-parser-perl
+          sudo apt install -y patchutils
+          sudo apt install -y lzop
+
+          # 3. 🔧 新增：验证所有关键工具是否存在（避免官方checkdeps检测失败）
+          echo "✅ 验证依赖工具是否可用"
+          which mkfontdir || (echo "❌ mkfontdir缺失" && exit 1)
+          which mkfontscale || (echo "❌ mkfontscale缺失" && exit 1)
+          which rdfind || (echo "❌ rdfind缺失" && exit 1)
+          which gperf || (echo "❌ gperf缺失" && exit 1)
+          which xsltproc || (echo "❌ xsltproc缺失，重新安装" && sudo apt install -y --reinstall libxslt1.1 xsltproc && exit 1)
+          which lsdiff || (echo "❌ lsdiff缺失" && exit 1)
+          which lzop || (echo "❌ lzop缺失" && exit 1)
+          echo "✅ 所有官方编译依赖安装+验证完成"
 
       - name: 切换到指定版本（与缓存一致）
         run: |
@@ -118,7 +126,7 @@ jobs:
           echo "📋 解压后，RK3328所有设备树文件（真实存在）："
           ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts
           ls -l "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi
-          # 动态获取官方主设备树（匹配你的日志：rk3328-a1.dts）
+          # 动态获取官方主设备树
           OFFICIAL_MAIN_DTS=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts | head -1)
           OFFICIAL_MAIN_DTSI=$(ls "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi | head -1)
           echo "✅ 自动获取官方主设备树：$OFFICIAL_MAIN_DTS"
@@ -150,14 +158,14 @@ jobs:
           fi
 
           mkdir -p tmp-patch
-          # 1. 复制官方真实设备树到临时目录（用于生成diff）
+          # 复制官方设备树到临时目录
           cp "${{ env.OFFICIAL_MAIN_DTS }}" tmp-patch/
           cp "${{ env.OFFICIAL_MAIN_DTSI }}" tmp-patch/
-          # 2. 替换为自定义设备树（保持官方文件名，确保补丁生效）
+          # 替换为自定义设备树
           cp "${{ env.DTS_MAIN }}" "${{ env.OFFICIAL_MAIN_DTS }}"
           cp "${{ env.DTS_INCLUDE }}" "${{ env.OFFICIAL_MAIN_DTSI }}"
 
-          # 生成官方兼容补丁（适配全新Git仓库，无HEAD^报错）
+          # 生成官方兼容补丁
           cd tmp-patch
           git init
           git config user.name "GitHub Actions"
@@ -172,7 +180,7 @@ jobs:
           PATCH_FILE=$(ls ${{ env.PATCH_DIR }}/*.patch | head -1)
           if [ -n "$PATCH_FILE" ]; then
             echo "✅ 生成官方兼容补丁完成：$PATCH_FILE"
-            cat "$PATCH_FILE" | head -5  # 打印补丁前5行，确认有效
+            cat "$PATCH_FILE" | head -5
           else
             echo "❌ 补丁生成失败！"
             exit 1
@@ -195,9 +203,9 @@ jobs:
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
-            du -sh "$IMAGE_FILE"
+            du -sh "$IMAGE            du -sh "$IMAGE_FILE"
           else
-            echo "❌ 未找到镜像，查看build.log排查（优先看补丁/设备树报错）"
+            echo "❌ 未找到镜像，查看build.log排查"
             exit 1
           fi
 
