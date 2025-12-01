@@ -24,7 +24,8 @@ on:
           - Generic
           - RPi（树莓派）
           - RK3328
-        default: RK3328
+          - Rockchip
+        default: Rockchip
       # 3. 选择架构（ARCH）
       arch:
         type: choice
