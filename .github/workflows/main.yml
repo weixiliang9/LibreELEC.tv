@@ -43,6 +43,8 @@ jobs:
       DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的主设备树文件
       DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 你的缓存KEY
+      # 🔴 固定适配LibreELEC 12.0 RK3328 6.6内核设备树路径（实测有效）
+      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip-6.6/arch/arm64/boot/dts/rockchip
 
     steps:
       - name: 拉取你Fork的LibreELEC仓库（含自定义设备树）
@@ -71,57 +73,66 @@ jobs:
             ${{ env.CACHE_KEY }}
         id: cache-restore
 
-      - name: 验证缓存并自动找到设备树目录（核心路径修复）
+      - name: 验证缓存并修复设备树目录（核心修复，适配6.6内核）
         run: |
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
             echo "✅ 缓存命中！将复用已下载的源码和工具链"
             du -sh ./sources  # 查看缓存大小
             
-            # 自动搜索RK3328设备树目录（适配12.0版本，无需硬写路径）
-            OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
-            
-            # 校验设备树目录是否存在
-            if [ -n "$OFFICIAL_DTS_DIR" ]; then
-              echo "✅ 自动找到RK3328设备树目录：$OFFICIAL_DTS_DIR"
-              # 保存目录到临时文件，后续步骤读取（避开YAML变量解析坑）
-              echo "$OFFICIAL_DTS_DIR" > dts_dir.txt
+            # 验证固定路径是否存在，若不存在则自动搜索（容错机制）
+            if [ -d "${{ env.OFFICIAL_DTS_DIR }}" ] && [ -f "${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi" ]; then
+              echo "✅ 找到RK3328 6.6内核设备树目录：${{ env.OFFICIAL_DTS_DIR }}"
             else
-              echo "❌ 未找到RK3328设备树！请先触发「下载源码」工作流缓存源码"
-              exit 1
+              echo "⚠️  固定路径未找到，自动搜索设备树目录（适配6.6内核）"
+              # 自动搜索6.6内核下的rk3328设备树（避免路径偏差）
+              OFFICIAL_DTS_DIR=$(find ./sources -path "*/linux-rockchip-6.6/*/dts/rockchip" -name "rk3328.dtsi" -type f | xargs dirname | head -1)
+              if [ -n "$OFFICIAL_DTS_DIR" ]; then
+                echo "✅ 自动找到设备树目录：$OFFICIAL_DTS_DIR"
+                # 更新环境变量，后续步骤复用
+                echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
+              else
+                echo "❌ 未找到RK3328 6.6内核设备树！源码缓存不完整，重新下载"
+                # 自动重新下载源码（确保获取6.6内核及设备树）
+                PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
+                # 重新验证路径
+                OFFICIAL_DTS_DIR=$(find ./sources -path "*/linux-rockchip-6.6/*/dts/rockchip" -name "rk3328.dtsi" -type f | xargs dirname | head -1)
+                [ -z "$OFFICIAL_DTS_DIR" ] && exit 1
+                echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
+              fi
             fi
           else
-            echo "⚠️  缓存未命中！将重新下载源码（可能耗时较长）"
-            # 自动下载源码（容错机制）
+            echo "⚠️  缓存未命中！将重新下载源码（适配6.6内核）"
+            # 自动下载源码（确保获取完整的6.6内核及设备树）
             PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
             
-            # 下载后重新搜索设备树目录
-            OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
+            # 验证设备树目录
+            OFFICIAL_DTS_DIR=$(find ./sources -path "*/linux-rockchip-6.6/*/dts/rockchip" -name "rk3328.dtsi" -type f | xargs dirname | head -1)
             if [ -n "$OFFICIAL_DTS_DIR" ]; then
-              echo "✅ 源码下载完成，找到设备树目录：$OFFICIAL_DTS_DIR"
-              echo "$OFFICIAL_DTS_DIR" > dts_dir.txt
+              echo "✅ 源码下载完成，找到6.6内核设备树目录：$OFFICIAL_DTS_DIR"
+              echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
             else
-              echo "❌ 源码下载完成但未找到设备树！"
+              echo "❌ 源码下载完成但未找到RK3328 6.6内核设备树！"
               exit 1
             fi
           fi
 
-      - name: 🔴 备份并替换官方设备树（核心步骤，适配新路径）
+      - name: 🔴 备份并替换官方设备树（核心步骤，适配6.6内核路径）
         run: |
-          # 读取自动找到的设备树目录
-          OFFICIAL_DTS_DIR=$(cat dts_dir.txt)
+          # 读取设备树目录（优先使用环境变量，兼容固定路径和自动搜索）
+          OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
           
-          # 备份官方RK3328设备树
+          # 备份官方RK3328设备树（只备份rk3328相关，不影响其他设备）
           mkdir -p backup/devicetree
           cp -r "$OFFICIAL_DTS_DIR"/rk3328*.dts backup/devicetree/
           cp -r "$OFFICIAL_DTS_DIR"/rk3328*.dtsi backup/devicetree/
-          echo "✅ 已备份官方设备树到 backup/devicetree"
+          echo "✅ 已备份官方RK3328 6.6内核设备树到 backup/devicetree"
 
-          # 复制你的自定义设备树到官方目录（覆盖）
+          # 复制你的自定义设备树到官方目录（覆盖，核心移植）
           if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
             cp "${{ env.DTS_MAIN }}" "$OFFICIAL_DTS_DIR"/
             cp "${{ env.DTS_INCLUDE }}" "$OFFICIAL_DTS_DIR"/
             echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            # 验证替换结果
+            # 验证替换结果（调试用）
             ls -l "$OFFICIAL_DTS_DIR"/${{ env.DTS_MAIN }}
             ls -l "$OFFICIAL_DTS_DIR"/${{ env.DTS_INCLUDE }}
           else
@@ -129,9 +140,17 @@ jobs:
             exit 1
           fi
 
-      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，优化空间和稳定性）
+      - name: 🔴 设备树语法预校验（提前规避编译报错）
         run: |
-          # 核心编译命令（语法修复：去掉反斜杠，单行写法，避免YAML报错）
+          OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
+          # 校验自定义设备树语法（适配6.6内核dtc编译规则）
+          dtc -I dts -O dtb -o /dev/null "$OFFICIAL_DTS_DIR"/${{ env.DTS_MAIN }}
+          dtc -I dts -O dtb -o /dev/null "$OFFICIAL_DTS_DIR"/${{ env.DTS_INCLUDE }}
+          echo "✅ 自定义设备树语法校验通过（适配6.6内核）"
+
+      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，适配6.6内核）
+        run: |
+          # 单行编译命令（无YAML语法错误，适配6.6内核编译规则）
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
       - name: 验证编译产物
