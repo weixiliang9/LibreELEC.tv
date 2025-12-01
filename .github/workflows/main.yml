@@ -53,21 +53,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 🔴 新增1：前置超级清理（优先级最高，释放30+GB，解决磁盘不足核心）
-      - name: 前置清理-释放系统空间（编译前必做）
+      # 🔴 修复后的前置清理（核心：忽略未安装包，不报错，仍释放30+GB）
+      - name: 前置清理-释放系统空间（编译前必做，修复报错）
         run: |
           echo "📊 清理前磁盘占用："
           df -h
-          # 1. 删除GitHub Runner预装的无用软件（编译LibreELEC完全用不到）
-          sudo apt-get remove -y --purge dotnet-sdk-* android-sdk-* code ghc haskell* mono-*
-          sudo apt-get autoremove -y
+          # 关键优化：--ignore-missing 忽略未安装的包，不报错；只删除真正可能预装的大体积包
+          sudo apt-get remove -y --purge --ignore-missing dotnet-* mono-* android-*
+          sudo apt-get autoremove -y --ignore-missing
           sudo apt-get clean
-          # 2. 清理系统缓存和临时文件
+          # 2. 清理系统缓存和临时文件（不变，核心释放空间）
           sudo rm -rf /var/cache/apt/* /var/log/* /tmp/*
           sudo rm -rf /home/runner/.nuget /home/runner/.cache /home/runner/.local
-          # 3. 清理Runner日志缓存（避免日志占满磁盘，对应你之前的报错）
+          # 3. 清理Runner日志缓存（对应你之前的报错，不变）
           sudo rm -rf /home/runner/actions-runner/_diag/*
-          # 4. 清理工具缓存目录（超大，可释放10+GB）
+          # 4. 清理工具缓存目录（超大，释放10+GB，不变）
           sudo rm -rf /opt/hostedtoolcache/*
           echo "📊 清理后磁盘占用："
           df -h
