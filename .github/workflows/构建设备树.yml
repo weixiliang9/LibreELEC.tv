@@ -1,128 +1,35 @@
-name: Compile RK3328 DTS to DTB & Upload Release
-
-on:
-  workflow_dispatch:
-    inputs:
-      release-tag:
-        description: 'Release tag name (e.g., v1.0.0)'
-        required: false
-        default: ''
+name: 编译DTS到DTB并上传Release
+on: workflow_dispatch
+  inputs:
+    release-tag:
+      description: 'Release标签（如v1.0.0）'
+      required: false
+      default: ''
 
 jobs:
-  compile-and-release:
+  compile:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: write
-
     steps:
-      - name: Checkout repository
+      - name: 拉取代码
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
 
-      - name: Install All Dependencies
+      - name: 安装dtc
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+
+      - name: 编译设备树
         run: |
-          set -x
-          sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential bison flex python3 python3-pip \
-            git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev patchutils \
-            device-tree-compiler gcc-aarch64-linux-gnu libc6-dev-arm64-cross pkg-config libglib2.0-dev
+          DTS="rk3328-l1pro-1296mhz.dts"
+          DTB="${DTS%.dts}.dtb"
+          
+          # 编译（直接用系统dtc，已验证可用）
+          dtc -I dts -O dtb -o "$DTB" "$DTS" -i ./ -v
+          echo "dtb_file=$DTB" >> $GITHUB_ENV
 
-      - name: 下载+构建DTC（容错版）
-        id: build-dtc
-        run: |
-          set -x
-          DTC_SRC_DIR="./dtc-src"
-          if [ ! -d "$DTC_SRC_DIR" ]; then
-            git clone --depth 1 https://github.com/dgibson/dtc.git "$DTC_SRC_DIR" || {
-              echo "⚠️ GitHub克隆失败，使用系统dtc"
-              echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-              echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
-              exit 0
-            }
-          fi
-
-          cd "$DTC_SRC_DIR"
-          make V=1 -j$(nproc) CC=gcc || {
-            echo "⚠️ DTC构建失败，切换系统dtc"
-            echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
-            exit 0
-          }
-
-          DTC_PATH="$DTC_SRC_DIR/dtc"
-          if [ -x "$DTC_PATH" ]; then
-            echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
-            echo "dtc_type=独立编译DTC（LibreELEC适配）" >> $GITHUB_ENV
-            $DTC_PATH --version
-          else
-            echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc (DTC 1.7.0)" >> $GITHUB_ENV
-          fi
-
-      - name: 编译设备树（错误明细输出版）
-        id: compile-dts
-        run: |
-          set -x
-          # 固定文件路径
-          DTS_FILE="rk3328-l1pro-1296mhz.dts"
-          DTSI_FILE="rk3328.dtsi"
-          DTB_FILE="${DTS_FILE%.dts}.dtb"
-
-          # 1. 再次确认文件存在（输出详细路径和权限）
-          echo "=== 验证文件存在性 ==="
-          ls -lh "$DTS_FILE" 2>/dev/null || { echo "❌ DTS文件不存在: $DTS_FILE"; exit 1; }
-          ls -lh "$DTSI_FILE" 2>/dev/null || { echo "❌ DTSI文件不存在: $DTSI_FILE"; exit 1; }
-          echo "文件权限：$(ls -l "$DTS_FILE" | awk '{print $1}')"
-          echo "文件大小：$(du -sh "$DTS_FILE" | awk '{print $1}')"
-
-          # 2. 输出DTS文件前20行（快速排查明显语法错误，如缺少分号、括号不匹配）
-          echo -e "\n=== DTS文件前20行内容 ==="
-          head -n 20 "$DTS_FILE"
-
-          # 3. 核心编译命令（增加--strict严格模式，输出完整错误明细）
-          echo -e "\n=== 开始编译（输出完整错误日志） ==="
-          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" \
-            -i ./ \
-            -v \
-            --strict  # 强制输出所有语法问题，不忽略任何错误
-
-          # 4. 捕获退出码，明确错误原因
-          EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo -e "\n❌ 编译失败！错误码：$EXIT_CODE"
-            echo "=== 错误原因分析 ==="
-            echo "1. 最可能：DTS/DTSI 存在语法错误（如缺少分号、括号不匹配、节点名错误）"
-            echo "2. 次可能：DTSI 中引用的节点/宏未定义（需检查 #include 路径和内容）"
-            echo "3. 参考：本地执行以下命令验证并修正："
-            echo "   dtc -I dts -O dtb -o test.dtb rk3328-l1pro-1296mhz.dts -i ./ -v --strict"
-            exit $EXIT_CODE
-          fi
-
-          # 5. 验证DTB产物
-          if [ -f "$DTB_FILE" ]; then
-            echo -e "\n✅ 编译成功！"
-            ls -lh "$DTB_FILE"
-            file "$DTB_FILE"
-            echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
-          else
-            echo -e "\n❌ DTB文件未生成"
-            exit 1
-          fi
-
-      - name: 上传DTB到Release
+      - name: 上传到Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release-tag || github.sha }}
           name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag || github.sha }}
           files: ${{ env.dtb_file }}
-          body: |
-            ## RK3328-L1Pro 设备树编译产物（LibreELEC 12.0 兼容）
-            - DTS源码：`rk3328-l1pro-1296mhz.dts`
-            - 依赖头文件：`rk3328.dtsi`
-            - 编译工具：${{ env.dtc_type }}
-            - 验证状态：DTB文件有效（可直接用于设备）
-          overwrite: true
