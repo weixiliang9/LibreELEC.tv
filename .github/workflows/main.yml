@@ -43,10 +43,12 @@ jobs:
       DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的主设备树文件
       DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 你的缓存KEY
-      OFFICIAL_DTS_DIR: projects/Rockchip/device-tree/rk3328  # 12.0 正确设备树目录
+      # 🔴 终极正确路径：设备树在缓存的 sources 目录中（不是主仓库！）
+      # 这个路径是 `download-tool` 下载后自动生成的，缓存恢复后就会存在
+      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip-5.15/arch/arm64/boot/dts/rockchip
 
     steps:
-      - name: 拉取你Fork的LibreELEC仓库（含自定义设备树）
+      - name: 拉取你Fork的LibreELEC仓库（编译脚本+自定义设备树）
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -55,6 +57,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y bc curl git rsync unzip xz-utils zip
+          # RK3328交叉编译+设备树编译依赖
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
 
       - name: 切换到指定版本（与缓存一致）
@@ -62,32 +65,7 @@ jobs:
           git checkout ${{ github.event.inputs.librelec_version }}
           git status  # 调试：确认当前分支
 
-      - name: 🔴 备份并替换官方设备树（核心修复，适配12.0目录）
-        run: |
-          if [ -d "${{ env.OFFICIAL_DTS_DIR }}" ]; then
-            echo "✅ 找到官方RK3328设备树目录：${{ env.OFFICIAL_DTS_DIR }}"
-          else
-            echo "❌ 官方设备树目录不存在！请确认LibreELEC版本为12.0"
-            exit 1
-          fi
-
-          mkdir -p backup/devicetree
-          cp -r ${{ env.OFFICIAL_DTS_DIR }}/*.dts backup/devicetree/
-          cp -r ${{ env.OFFICIAL_DTS_DIR }}/*.dtsi backup/devicetree/
-          echo "✅ 已备份官方设备树到 backup/devicetree"
-
-          if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
-            cp ${{ env.DTS_MAIN }} ${{ env.OFFICIAL_DTS_DIR }}/
-            cp ${{ env.DTS_INCLUDE }} ${{ env.OFFICIAL_DTS_DIR }}/
-            echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            ls -l ${{ env.OFFICIAL_DTS_DIR }}/*.dts
-            ls -l ${{ env.OFFICIAL_DTS_DIR }}/*.dtsi
-          else
-            echo "❌ 未找到自定义设备树文件！请确认文件在仓库根目录"
-            exit 1
-          fi
-
-      - name: 🔴 恢复源码缓存（避免重复下载，节省空间和时间）
+      - name: 🔴 恢复源码缓存（关键！设备树在缓存里，必须先恢复）
         uses: actions/cache@v3
         with:
           path: ./sources
@@ -96,24 +74,58 @@ jobs:
             ${{ env.CACHE_KEY }}
         id: cache-restore
 
-      - name: 验证缓存是否恢复成功
+      - name: 验证缓存&设备树目录（必过，缓存恢复后就有）
         run: |
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ 缓存命中！将复用已下载的源码和工具链"
+            echo "✅ 缓存命中！复用已下载的源码和设备树"
             du -sh ./sources
+            # 验证设备树目录是否存在（核心校验）
+            if [ -d "${{ env.OFFICIAL_DTS_DIR }}" ]; then
+              echo "✅ 找到RK3328设备树目录：${{ env.OFFICIAL_DTS_DIR }}"
+              # 打印目录内容，确认有rk3328相关设备树（调试用）
+              ls -l ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dts
+              ls -l ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dtsi
+            else
+              echo "❌ 设备树目录不存在！请先触发「下载源码」工作流缓存源码"
+              exit 1
+            fi
           else
             echo "⚠️  缓存未命中！将重新下载源码（可能耗时较长）"
+            # 重新下载源码（避免缓存失效导致失败）
+            PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
           fi
 
-      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，优化空间和稳定性）
+      - name: 🔴 备份并替换设备树（终极核心步骤，适配缓存目录）
         run: |
-          # 🔴 语法修正：去掉反斜杠，用单行或规范换行（YAML不支持末尾反斜杠缩进）
+          # 1. 备份官方RK3328设备树（从缓存目录备份）
+          mkdir -p backup/devicetree
+          cp -r ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dts backup/devicetree/
+          cp -r ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dtsi backup/devicetree/
+          echo "✅ 已备份官方RK3328设备树到 backup/devicetree"
+
+          # 2. 复制你的自定义设备树到缓存的设备树目录（覆盖官方文件，移植核心）
+          if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
+            cp ${{ env.DTS_MAIN }} ${{ env.OFFICIAL_DTS_DIR }}/
+            cp ${{ env.DTS_INCLUDE }} ${{ env.OFFICIAL_DTS_DIR }}/
+            echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
+            # 再次验证替换结果
+            ls -l ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dts
+            ls -l ${{ env.OFFICIAL_DTS_DIR }}/rk3328*.dtsi
+          else
+            echo "❌ 未找到自定义设备树文件！请确认文件在仓库根目录"
+            exit 1
+          fi
+
+      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，无报错）
+        run: |
+          # 单行命令，无YAML语法问题，编译时会读取缓存目录中的设备树
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
       - name: 验证编译产物
         run: |
           echo "📁 编译产物目录（target）："
           ls -l target/
+          # 查找镜像文件（.img.gz 或 .img）
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
@@ -130,7 +142,7 @@ jobs:
           path: |
             target/*.img.gz
             target/*.img
-            build.log
+            build.log  # 同时上传编译日志，方便调试
           retention-days: 30
           if-no-files-found: error
 
