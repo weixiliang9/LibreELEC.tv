@@ -1,123 +1,153 @@
 name: Compile RK3328 DTS to DTB & Upload Release
 
-# 手动触发，无需输入参数（DTS文件名固定）
 on:
   workflow_dispatch:
-    # 可选：允许手动指定Release版本号（默认用commit-sha）
     inputs:
       release-tag:
-        description: 'Release tag name (e.g., v1.0.0, default: commit-sha)'
+        description: 'Release tag name (e.g., v1.0.0)'
         required: false
         default: ''
+      # 新增：允许手动选择是否重新保存缓存（首次执行或缓存丢失时使用）
+      rebuild-cache:
+        description: 'Rebuild and save cache (use when cache is missing)'
+        required: true
+        default: 'false'
+        type: boolean
 
 jobs:
   compile-and-release:
     runs-on: ubuntu-latest
-    name: Compile DTS → DTB → Upload Release
-    timeout-minutes: 45  # 适配缓存恢复+dtc构建耗时
+    timeout-minutes: 60  # 延长超时（首次下载源码耗时久）
+    permissions:
+      contents: write  # 确保Release和缓存权限
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # 确保子模块完整（即使有缓存，避免缺失依赖）
+          submodules: recursive
           fetch-depth: 0
 
-      - name: Restore cached sources (LibreELEC 12.0 RK3328)
+      - name: Restore cached sources (Allow miss)
         uses: actions/cache/restore@v3
+        id: cache-restore
         with:
-          # 缓存key与你提前缓存的一致
           key: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
-          # LibreELEC常见源码/构建缓存路径（根据实际缓存内容调整，确保覆盖所有依赖包）
+          # 确保缓存路径覆盖LibreELEC源码核心目录（根据实际情况调整）
           path: |
             ./sources
             ./build
             ./projects
             ./toolchain
-          fail-on-cache-miss: true  # 缓存未命中时直接失败（避免重复下载，符合你的缓存设计）
+            ./distributions
+            ./packages
+          fail-on-cache-miss: false  # 关键：缓存未命中时不失败，继续执行后续步骤
           restore-keys: |
             librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
 
-      - name: Install required dependencies
+      - name: Log cache status
         run: |
-          sudo apt-get update -y
-          # 仅补充缓存中可能缺失的系统依赖（dtc构建必需）
-          sudo apt-get install -y build-essential bison flex python3 python3-pip
+          echo "✅ 缓存恢复状态: ${{ steps.cache-restore.outputs.cache-hit }}"
+          if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ 缓存命中！使用缓存的源码"
+            # 验证缓存的目录是否存在
+            ls -l ./projects/Rockchip || echo "⚠️ 缓存中未找到Rockchip项目目录"
+          else
+            echo "⚠️ 缓存未命中！将自动下载LibreELEC 12.0 RK3328源码"
+          fi
 
-      - name: Build DTC from LibreELEC source (RK3328)
-        id: build-dtc
+      - name: Install dependencies (Full Set)
         run: |
-          # 精准查找RK3328对应的Linux内核目录（LibreELEC 12.0 Rockchip结构）
+          set -x
+          # 换阿里云源（解决Ubuntu默认源下载慢/失败问题）
+          sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+          sudo apt-get update -y
+          # 安装LibreELEC构建必需的所有依赖
+          sudo apt-get install -y build-essential bison flex python3 python3-pip \
+            git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev
+
+      - name: Download LibreELEC 12.0 RK3328 Sources (if cache miss)
+        id: download-sources
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        run: |
+          set -x
+          # 使用LibreELEC官方脚本初始化RK3328项目（自动下载内核+依赖源码）
+          PROJECT=Rockchip DEVICE=RK3328 ARCH=aarch64 ./scripts/build prepare
+          # 验证下载结果
           LINUX_DIR=$(find ./projects/Rockchip -path "*/linux-*" -type d | head -n 1)
           if [ -z "$LINUX_DIR" ]; then
-            echo "Error: RK3328 Linux kernel directory not found in projects/Rockchip/"
+            echo "❌ 源码下载失败！未找到Linux内核目录"
             exit 1
           fi
-          echo "✅ Found RK3328 Linux dir: $LINUX_DIR"
+          echo "✅ 源码下载完成，内核目录: $LINUX_DIR"
 
-          # 构建dtc（复用缓存的源码，速度更快）
-          make -C "$LINUX_DIR" scripts/dtc -j$(nproc)
+      - name: Build DTC from LibreELEC Source
+        id: build-dtc
+        run: |
+          set -x
+          # 精准查找RK3328内核目录（兼容缓存/下载两种场景）
+          LINUX_DIR=$(find ./projects/Rockchip -maxdepth 4 -name "linux-*" -type d | head -n 1)
+          if [ -z "$LINUX_DIR" ]; then
+            echo "❌ 未找到RK3328 Linux内核目录！"
+            ls -l ./projects/Rockchip  # 输出目录结构供排查
+            exit 1
+          fi
+          echo "✅ 内核目录: $LINUX_DIR"
+
+          # 构建dtc（增加V=1输出详细日志，方便排查编译失败）
+          make -C "$LINUX_DIR" scripts/dtc V=1 -j$(nproc)
           DTC_PATH="$LINUX_DIR/scripts/dtc/dtc"
 
-          # 验证dtc可用性
+          # 验证dtc是否可用
           if [ ! -x "$DTC_PATH" ]; then
-            echo "Error: DTC build failed, executable not found"
+            echo "❌ DTC构建失败！查看dtc目录内容："
+            ls -l "$LINUX_DIR/scripts/dtc/"
             exit 1
           fi
           echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
-          echo "✅ DTC built successfully: $DTC_PATH"
+          echo "✅ DTC构建成功: $DTC_PATH"
 
-      - name: Compile fixed DTS (rk3328-l1pro-1296mhz.dts)
+      - name: Compile DTS (Fixed Files)
         id: compile-dts
         run: |
-          # 固定DTS文件名和路径（根目录）
+          set -x
           DTS_FILE="rk3328-l1pro-1296mhz.dts"
           DTSI_FILE="rk3328.dtsi"
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
-          # 验证DTS和DTSI文件存在
-          if [ ! -f "$DTS_FILE" ]; then
-            echo "Error: DTS file not found in repo root: $DTS_FILE"
-            exit 1
-          fi
-          if [ ! -f "$DTSI_FILE" ]; then
-            echo "Error: DTSI header file not found in repo root: $DTSI_FILE"
-            exit 1
-          fi
-          echo "✅ Found DTS: $DTS_FILE, DTSI: $DTSI_FILE"
+          # 验证DTS/DTSI存在
+          [ ! -f "$DTS_FILE" ] && echo "❌ 找不到DTS文件: $DTS_FILE" && exit 1
+          [ ! -f "$DTSI_FILE" ] && echo "❌ 找不到DTSI文件: $DTSI_FILE" && exit 1
 
-          # 编译（指定根目录为包含路径，确保DTS能找到同目录的DTSI）
-          echo "Compiling $DTS_FILE → $DTB_FILE..."
-          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./
-
-          # 验证编译结果
-          if [ ! -f "$DTB_FILE" ]; then
-            echo "Error: DTB compilation failed, file not generated"
-            exit 1
-          fi
-          ls -lh "$DTB_FILE"
+          # 编译（保留-i ./确保DTSI能被找到，增加-v输出详细信息）
+          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./ -v
           echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
-          echo "✅ DTB compiled successfully: $DTB_FILE"
+          echo "✅ DTB编译成功: $DTB_FILE"
+          ls -lh "$DTB_FILE"
 
-      - name: Create & Upload Release with DTB
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 仓库默认密钥，无需额外配置
         with:
-          # Release标签：优先使用输入，否则用commit-sha（确保唯一）
-          tag_name: ${{ github.event.inputs.release-tag != '' && github.event.inputs.release-tag || github.sha }}
-          # Release标题（含设备名和commit信息）
-          name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag != '' && github.event.inputs.release-tag || github.sha }}
-          # Release描述
+          tag_name: ${{ github.event.inputs.release-tag || github.sha }}
+          name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag || github.sha }}
+          files: ${{ env.dtb_file }}
           body: |
-            ## 设备树编译产物（LibreELEC 12.0 RK3328）
+            ## RK3328-L1Pro 设备树编译产物
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
-            - 编译工具：LibreELEC内核自带DTC（从源码构建）
-            - 对应Commit：${{ github.sha }}
-          # 上传编译后的DTB文件
-          files: ${{ env.dtb_file }}
-          # 可选：设置为预发布（根据需求调整）
-          prerelease: false
-          # 可选：覆盖已有相同标签的Release（避免重复标签报错）
+            - 编译工具：LibreELEC 12.0 RK3328 内核自带DTC
+            - 缓存状态：${{ steps.cache-restore.outputs.cache-hit == 'true' ? '已使用缓存' : '首次下载源码' }}
           overwrite: true
+
+      - name: Save cache (if enabled)
+        uses: actions/cache/save@v3
+        if: github.event.inputs.rebuild-cache == 'true'
+        with:
+          key: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
+          path: |
+            ./sources
+            ./build
+            ./projects
+            ./toolchain
+            ./distributions
+            ./packages
