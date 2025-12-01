@@ -22,98 +22,78 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install All Dependencies (强化版)
+      - name: Install All Dependencies
         run: |
           set -x
-          # 换源+安装所有可能缺失的依赖
           sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           sudo apt-get update -y
           sudo apt-get install -y build-essential bison flex python3 python3-pip \
             git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev patchutils \
-            device-tree-compiler gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
-            pkg-config libglib2.0-dev # 补充交叉编译和glib依赖（dtc构建必需）
+            device-tree-compiler gcc-aarch64-linux-gnu libc6-dev-arm64-cross pkg-config libglib2.0-dev
 
-      - name: 下载+构建DTC（极简容错版）
+      - name: 下载+构建DTC（容错版）
         id: build-dtc
         run: |
           set -x
-          # 方案1：直接下载独立dtc源码（无需完整内核，体积小、成功率100%）
           DTC_SRC_DIR="./dtc-src"
           if [ ! -d "$DTC_SRC_DIR" ]; then
-            echo "📥 下载独立DTC源码（LibreELEC 12.0 适配版本）"
+            echo "📥 下载独立DTC源码"
             git clone --depth 1 https://github.com/dgibson/dtc.git "$DTC_SRC_DIR" || {
-              echo "⚠️ GitHub克隆失败，尝试Gitee镜像"
-              git clone --depth 1 https://gitee.com/mirrors/dtc.git "$DTC_SRC_DIR" || {
-                echo "❌ DTC源码克隆失败，直接使用系统dtc"
-                echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-                echo "dtc_type=系统dtc（终极容错）" >> $GITHUB_ENV
-                exit 0 # 跳过后续构建，直接用系统dtc
-              }
+              echo "⚠️ GitHub克隆失败，使用系统dtc"
+              echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
+              echo "dtc_type=系统dtc" >> $GITHUB_ENV
+              exit 0
             }
           fi
 
-          # 构建独立dtc（不依赖内核，编译简单）
           echo "🔨 构建独立DTC工具"
           cd "$DTC_SRC_DIR"
           make V=1 -j$(nproc) CC=gcc || {
-            echo "⚠️ DTC源码构建失败，切换到系统dtc"
+            echo "⚠️ DTC构建失败，切换系统dtc"
             echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc（构建失败容错）" >> $GITHUB_ENV
+            echo "dtc_type=系统dtc" >> $GITHUB_ENV
             exit 0
           }
 
-          # 验证并输出dtc路径
           DTC_PATH="$DTC_SRC_DIR/dtc"
           if [ -x "$DTC_PATH" ]; then
             echo "dtc_path=$DTC_PATH" >> $GITHUB_ENV
             echo "dtc_type=独立编译DTC（LibreELEC适配）" >> $GITHUB_ENV
-            echo "✅ DTC构建成功: $DTC_PATH"
             $DTC_PATH --version
           else
-            echo "⚠️ DTC构建异常，切换到系统dtc"
             echo "dtc_path=$(which dtc)" >> $GITHUB_ENV
-            echo "dtc_type=系统dtc（最终容错）" >> $GITHUB_ENV
+            echo "dtc_type=系统dtc" >> $GITHUB_ENV
           fi
 
-      - name: 编译设备树（固定文件+详细日志）
+      - name: 编译设备树（最终稳定版）
         id: compile-dts
         run: |
           set -x
-          # 固定目标文件（根目录）
+          # 固定文件路径
           DTS_FILE="rk3328-l1pro-1296mhz.dts"
           DTSI_FILE="rk3328.dtsi"
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
-          # 严格校验输入文件
-          if [ ! -f "$DTS_FILE" ]; then
-            echo "❌ 根目录未找到DTS文件: $DTS_FILE"
-            ls -lh ./
-            exit 1
-          fi
-          if [ ! -f "$DTSI_FILE" ]; then
-            echo "❌ 根目录未找到DTSI头文件: $DTSI_FILE"
-            ls -lh ./
-            exit 1
-          fi
+          # 校验文件存在性
+          [ ! -f "$DTS_FILE" ] && echo "❌ 未找到DTS文件: $DTS_FILE" && exit 1
+          [ ! -f "$DTSI_FILE" ] && echo "❌ 未找到DTSI文件: $DTSI_FILE" && exit 1
 
-          # 编译（输出所有细节日志，方便排查语法错误）
-          echo "📦 开始编译：$DTS_FILE → $DTB_FILE"
-          echo "使用的dtc工具：${{ env.dtc_path }}"
+          # 核心编译命令（修复参数格式，移除多余注释和换行）
+          echo "📦 编译设备树：$DTS_FILE → $DTB_FILE"
           ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" \
             -i ./ \
             -v \
-            -Wno-all \ # 关闭所有警告（只关注错误）
-            --debug # 输出调试日志
+            -Wno-all \
+            --debug
 
           # 验证编译结果
           if [ -f "$DTB_FILE" ]; then
-            echo "✅ 编译成功！文件信息："
+            echo "✅ 编译成功！"
             ls -lh "$DTB_FILE"
             file "$DTB_FILE"
             echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
           else
-            echo "❌ DTB文件未生成，编译失败！"
-            echo "=== DTC编译详细日志结束 ==="
+            echo "❌ DTB未生成，编译失败"
             exit 1
           fi
 
@@ -128,5 +108,5 @@ jobs:
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
             - 编译工具：${{ env.dtc_type }}
-            - 编译状态：成功（自动容错，确保可用）
+            - DTC版本：${{ env.dtc_path }} --version（执行日志可查）
           overwrite: true
