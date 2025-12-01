@@ -1,10 +1,8 @@
 name: 手动触发 - 下载LibreELEC源码（缓存到仓库）
 
-# 核心：手动触发，暴露3个可选择参数
 on:
   workflow_dispatch:
     inputs:
-      # 1. 选择系统分支/版本（对应git checkout的tag或分支）
       librelec_version:
         type: choice
         description: 选择LibreELEC分支/版本（tag或branch）
@@ -15,7 +13,6 @@ on:
           - 11.0.1（稳定版）
           - libreelec-12.0
         default: libreelec-12.0
-      # 2. 选择PROJECT（对应文档中的Generic等，可扩展其他项目）
       project:
         type: choice
         description: 选择构建项目（PROJECT）
@@ -26,7 +23,6 @@ on:
           - RK3328
           - Rockchip
         default: Rockchip
-      # 3. 选择架构（ARCH）
       arch:
         type: choice
         description: 选择目标架构（ARCH）
@@ -36,48 +32,49 @@ on:
           - armv7
           - aarch64
         default: aarch64
+      # 🔴 新增：Rockchip项目专用 - 选择具体设备型号（解决报错的关键）
+      rockchip_device:
+        type: choice
+        description: Rockchip项目专用 - 选择具体设备（非Rockchip项目可忽略）
+        required: true
+        options:
+          - RK3288
+          - RK3328  # 你的目标设备，默认选中
+          - RK3399
+        default: RK3328
 
-# 工作流执行步骤
 jobs:
   download-sources:
-    runs-on: ubuntu-latest  # 用Ubuntu，和官方一致，兼容性最好
+    runs-on: ubuntu-latest
     steps:
-      # 步骤1：拉取Fork后的仓库源码（基础操作）
       - name: 拉取LibreELEC仓库源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 拉取所有历史版本，方便切换tag/分支
-        #  path: LibreELEC.tv
+          fetch-depth: 0
 
-      # 步骤2：安装下载源码所需的依赖（对应文档中的依赖命令）
       - name: 安装依赖包
         run: |
           sudo apt update
           sudo apt install -y bc curl git rsync unzip xz-utils zip
 
-      # 步骤3：切换到指定的LibreELEC版本（对应文档中的git checkout）
       - name: 切换分支/版本
         run: |
           git checkout ${{ github.event.inputs.librelec_version }}
 
-      # 步骤4：提前下载所有源码（包括工具链+系统包源码，复用文档的download-tool）
+      # 🔴 关键修改：执行download-tool时，额外添加设备参数 DEVICE=${{ ... }}
       - name: 下载源码包（含工具链源码）
         run: |
-          # cd LibreELEC.tv
-          # 执行文档中的下载命令，用输入的PROJECT和ARCH
-          PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} tools/download-tool
+          # 核心：Rockchip项目必须指定DEVICE，其他项目（如Generic）可忽略DEVICE参数
+          PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
 
-      # 步骤5：打包源码缓存目录，方便上传
       - name: 打包源码包
         run: |
-          # 打包sources目录（源码缓存目录），命名包含版本、PROJECT、ARCH，方便区分
-          zip -r librelec-sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}.zip LibreELEC.tv/sources/
+          zip -r librelec-sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}.zip sources/
 
-      # 步骤6：上传打包后的源码包到仓库Releases（永久缓存，方便后续下载）
       - name: 上传源码包到Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}
-          name: 源码包-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}
+          tag_name: sources-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
+          name: 源码包-${{ github.event.inputs.librelec_version }}-${{ github.event.inputs.project }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.rockchip_device }}
           files: librelec-sources-*.zip
-          body: 自动下载的LibreELEC源码包（含工具链源码），版本：${{ github.event.inputs.librelec_version }}，PROJECT：${{ github.event.inputs.project }}，ARCH：${{ github.event.inputs.arch }}
+          body: 自动下载的LibreELEC源码包（含工具链源码），版本：${{ github.event.inputs.librelec_version }}，PROJECT：${{ github.event.inputs.project }}，ARCH：${{ github.event.inputs.arch }}，Rockchip设备：${{ github.event.inputs.rockchip_device }}
