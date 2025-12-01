@@ -16,7 +16,7 @@ on:
 jobs:
   compile-and-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90  # 延长超时（初始化+下载源码耗时更久）
     permissions:
       contents: write
 
@@ -39,6 +39,7 @@ jobs:
             ./toolchain
             ./distributions
             ./packages
+            ./config
           fail-on-cache-miss: false
           restore-keys: |
             librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
@@ -49,10 +50,10 @@ jobs:
           echo "✅ 缓存恢复状态: ${{ steps.cache-restore.outputs.cache-hit }}"
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
             echo "cache_status=已使用缓存" >> $GITHUB_OUTPUT
-            ls -l ./projects/Rockchip || echo "⚠️ 缓存中未找到Rockchip项目目录"
+            ls -l ./projects/Rockchip/device || echo "⚠️ 缓存中未找到Rockchip设备配置目录"
           else
             echo "cache_status=首次下载源码" >> $GITHUB_OUTPUT
-            echo "⚠️ 缓存未命中！将自动下载LibreELEC 12.0 RK3328源码"
+            echo "⚠️ 缓存未命中！将自动初始化LibreELEC 12.0 RK3328项目"
           fi
 
       - name: Install dependencies (Full Set)
@@ -60,37 +61,74 @@ jobs:
           set -x
           sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           sudo apt-get update -y
+          # 补充LibreELEC构建脚本依赖（解决脚本执行失败）
           sudo apt-get install -y build-essential bison flex python3 python3-pip \
-            git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev
+            git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev patchutils
 
-      - name: Download LibreELEC 12.0 RK3328 Sources (if cache miss)
-        id: download-sources
+      - name: Initialize LibreELEC RK3328 Project (if cache miss)
+        id: init-project
         if: steps.cache-restore.outputs.cache-hit != 'true'
         run: |
           set -x
-          PROJECT=Rockchip DEVICE=RK3328 ARCH=aarch64 ./scripts/build prepare
+          # 关键修复：用LibreELEC通用初始化命令（替代prepare，自动创建配置文件）
+          # 先查找Rockchip项目下的RK3328设备配置（兼容设备名后缀，如RK3328-Generic）
+          DEVICE_DIR=$(find ./projects/Rockchip/device -name "*RK3328*" -type d | head -n 1)
+          if [ -z "$DEVICE_DIR" ]; then
+            echo "❌ 未找到RK3328设备配置！尝试创建基础配置"
+            # 手动指定设备名（LibreELEC 12.0 Rockchip默认支持RK3328-Generic）
+            export PROJECT=Rockchip
+            export DEVICE=RK3328-Generic
+            export ARCH=aarch64
+          else
+            # 自动提取找到的设备名（如RK3328-Generic）
+            DEVICE=$(basename "$DEVICE_DIR")
+            export PROJECT=Rockchip
+            export DEVICE="$DEVICE"
+            export ARCH=aarch64
+          fi
+
+          echo "📌 当前项目配置：PROJECT=$PROJECT, DEVICE=$DEVICE, ARCH=$ARCH"
+          # 执行初始化（下载内核、依赖源码，创建必要的.mk配置文件）
+          ./scripts/build initialize
+
+          # 验证初始化结果：检查Linux内核目录是否存在
           LINUX_DIR=$(find ./projects/Rockchip -path "*/linux-*" -type d | head -n 1)
           if [ -z "$LINUX_DIR" ]; then
-            echo "❌ 源码下载失败！未找到Linux内核目录"
+            echo "❌ 项目初始化失败！未找到Linux内核目录"
+            ls -l ./projects/Rockchip  # 输出目录结构供排查
             exit 1
           fi
-          echo "✅ 源码下载完成，内核目录: $LINUX_DIR"
+          echo "✅ 项目初始化完成，内核目录: $LINUX_DIR"
+          echo "linux_dir=$LINUX_DIR" >> $GITHUB_ENV
+
+      - name: Locate Linux Kernel Directory (cache hit)
+        id: locate-linux
+        if: steps.cache-restore.outputs.cache-hit == 'true'
+        run: |
+          set -x
+          LINUX_DIR=$(find ./projects/Rockchip -path "*/linux-*" -type d | head -n 1)
+          if [ -z "$LINUX_DIR" ]; then
+            echo "❌ 缓存中未找到Linux内核目录！"
+            ls -l ./projects/Rockchip
+            exit 1
+          fi
+          echo "linux_dir=$LINUX_DIR" >> $GITHUB_ENV
+          echo "✅ 从缓存加载内核目录: $LINUX_DIR"
 
       - name: Build DTC from LibreELEC Source
         id: build-dtc
         run: |
           set -x
-          LINUX_DIR=$(find ./projects/Rockchip -maxdepth 4 -name "linux-*" -type d | head -n 1)
-          if [ -z "$LINUX_DIR" ]; then
-            echo "❌ 未找到RK3328 Linux内核目录！"
-            ls -l ./projects/Rockchip
-            exit 1
-          fi
+          LINUX_DIR="${{ env.linux_dir }}"
           echo "✅ 内核目录: $LINUX_DIR"
 
-          make -C "$LINUX_DIR" scripts/dtc V=1 -j$(nproc)
-          DTC_PATH="$LINUX_DIR/scripts/dtc/dtc"
+          # 构建dtc（增加错误重试，避免临时编译失败）
+          make -C "$LINUX_DIR" scripts/dtc V=1 -j$(nproc) || (
+            echo "⚠️ 首次构建失败，重试一次..."
+            make -C "$LINUX_DIR" scripts/dtc V=1 -j$(nproc)
+          )
 
+          DTC_PATH="$LINUX_DIR/scripts/dtc/dtc"
           if [ ! -x "$DTC_PATH" ]; then
             echo "❌ DTC构建失败！查看dtc目录内容："
             ls -l "$LINUX_DIR/scripts/dtc/"
@@ -110,7 +148,8 @@ jobs:
           [ ! -f "$DTS_FILE" ] && echo "❌ 找不到DTS文件: $DTS_FILE" && exit 1
           [ ! -f "$DTSI_FILE" ] && echo "❌ 找不到DTSI文件: $DTSI_FILE" && exit 1
 
-          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./ -v
+          # 编译时增加调试参数，输出依赖解析日志
+          ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./ -v -Wno-deprecated
           echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
           echo "✅ DTB编译成功: $DTB_FILE"
           ls -lh "$DTB_FILE"
@@ -126,7 +165,8 @@ jobs:
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
             - 编译工具：LibreELEC 12.0 RK3328 内核自带DTC
-            - 缓存状态：${{ steps.cache-info.outputs.cache_status }}  # 引用步骤输出，避免三元运算符
+            - 缓存状态：${{ steps.cache-info.outputs.cache_status }}
+            - 项目配置：PROJECT=Rockchip, DEVICE=${{ env.DEVICE || 'RK3328-Generic' }}
           overwrite: true
 
       - name: Save cache (if enabled)
@@ -141,3 +181,4 @@ jobs:
             ./toolchain
             ./distributions
             ./packages
+            ./config
