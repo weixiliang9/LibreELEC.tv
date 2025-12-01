@@ -1,4 +1,4 @@
-name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz，最终无坑版）
+name: RK3328 自动编译 - 官方补丁
 on:
   workflow_dispatch:
     inputs:
