@@ -46,8 +46,8 @@ jobs:
       - name: 拉取LibreELEC仓库源码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1  # 拉取所有历史版本，方便切换tag/分支
-          path: LibreELEC.tv
+          fetch-depth: 0  # 拉取所有历史版本，方便切换tag/分支
+        #  path: LibreELEC.tv
 
       # 步骤2：安装下载源码所需的依赖（对应文档中的依赖命令）
       - name: 安装依赖包
@@ -63,7 +63,7 @@ jobs:
       # 步骤4：提前下载所有源码（包括工具链+系统包源码，复用文档的download-tool）
       - name: 下载源码包（含工具链源码）
         run: |
-          cd LibreELEC.tv
+          # cd LibreELEC.tv
           # 执行文档中的下载命令，用输入的PROJECT和ARCH
           PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} tools/download-tool
 
