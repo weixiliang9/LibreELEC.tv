@@ -1,5 +1,4 @@
-name: RK3328 自动编译 - 适配 L1Pro (1296MHz)
-
+name: RK3328 自动编译 - 官方补丁版（适配L1Pro 1296MHz）
 on:
   workflow_dispatch:
     inputs:
@@ -39,34 +38,34 @@ jobs:
   build-rk3328-image:
     runs-on: ubuntu-latest
     env:
-      TEMP_DIR: /tmp/libreelec-build  # 扩容临时目录，解决空间不足
-      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的主设备树文件
-      DTS_INCLUDE: rk3328.dtsi        # 你的设备树头文件
+      TEMP_DIR: /tmp/libreelec-build  # 扩容临时目录（编译需≥20GB）
+      DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的自定义设备树
+      DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 缓存KEY
-      # 🔴 官方标准设备树路径（适配6.6内核）
-      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip-6.6/arch/arm64/boot/dts/rockchip
-      # 🔴 官方推荐补丁目录（非直接替换）
-      PATCH_DIR: projects/Rockchip/patches/linux
+      # 🔴 官方标准路径（查阅官方源码确认，无版本号后缀！）
+      OFFICIAL_DTS_DIR: ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip
+      PATCH_DIR: projects/Rockchip/patches/linux  # 官方推荐补丁目录
 
     steps:
       - name: 拉取Fork的LibreELEC仓库（含自定义设备树）
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # 拉取完整主仓库（含官方补丁目录结构）
 
-      - name: 安装编译依赖（基础+RK3328专用）
+      - name: 安装官方编译依赖（严格对照官方文档）
         run: |
           sudo apt update
+          # 官方基础依赖
           sudo apt install -y bc curl git rsync unzip xz-utils zip
-          # RK3328交叉编译+设备树编译依赖
-          sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
+          # RK3328交叉编译+设备树+补丁依赖（官方专属）
+          sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler diffutils
 
-      - name: 切换到指定版本（与缓存一致）
+      - name: 切换到指定版本（与缓存/官方一致）
         run: |
-          git checkout ${{ github.event.inputs.libreelec_version }}
-          git status  # 调试：确认当前分支
+          git checkout ${{ github.event.inputs.librelec_version }}
+          git status  # 调试：确认当前分支无异常
 
-      - name: 🔴 恢复源码缓存（必须先恢复，设备树在sources目录中）
+      - name: 🔴 恢复源码缓存（优先复用，缺失则补全）
         uses: actions/cache@v3
         with:
           path: ./sources
@@ -75,112 +74,116 @@ jobs:
             ${{ env.CACHE_KEY }}
         id: cache-restore
 
-      - name: 验证缓存并确认设备树路径（官方标准）
+      - name: 🔴 打印源码目录结构（调试核心，看清缓存里有什么）
         run: |
+          echo "📁 查看sources目录核心结构（确认源码完整性）"
+          ls -l ./sources/linux/  # 查看linux内核目录（关键）
+          ls -l ./sources/linux/linux-rockchip/arch/arm64/boot/dts/rockchip/  # 查看设备树目录
+          du -sh ./sources/linux/linux-rockchip  # 查看RK3328内核源码大小
+
+      - name: 🔴 强制补全RK3328专属源码（解决缓存缺失设备树问题）
+        run: |
+          # 核心：即使缓存命中，也强制校验RK3328设备树；缺失则重新下载（指定DEVICE=RK3328）
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ 缓存命中！将复用已下载的源码和工具链"
-            du -sh ./sources  # 查看缓存大小
-            
-            # 验证官方设备树路径是否存在
+            echo "✅ 缓存命中！校验RK3328设备树是否存在"
+            # 校验官方设备树路径+核心文件（rk3328.dtsi必须存在）
             if [ -d "${{ env.OFFICIAL_DTS_DIR }}" ] && [ -f "${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi" ]; then
-              echo "✅ 找到官方RK3328设备树目录：${{ env.OFFICIAL_DTS_DIR }}"
+              echo "✅ 已找到RK3328官方设备树（路径正确）"
             else
-              echo "❌ 未找到官方设备树！请先触发「下载源码」工作流缓存完整源码"
-              exit 1
+              echo "⚠️  缓存缺失RK3328设备树！强制重新下载专属源码"
+              # 官方标准下载命令（指定DEVICE=RK3328，确保下载完整设备树）
+              PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
             fi
           else
-            echo "⚠️  缓存未命中！将重新下载源码（含完整设备树）"
-            # 自动下载源码（确保获取完整6.6内核及设备树）
+            echo "⚠️  缓存未命中！下载RK3328专属源码（含设备树）"
             PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
-            
-            # 验证下载后的设备树路径
-            if [ ! -d "${{ env.OFFICIAL_DTS_DIR }}" ] || [ ! -f "${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi" ]; then
-              echo "❌ 源码下载完成但未找到RK3328设备树！"
-              exit 1
-            fi
           fi
 
-      - name: 🔴 创建设备树补丁（官方推荐方式，非直接替换）
+      - name: 🔴 最终校验设备树路径（确保万无一失）
         run: |
-          # 1. 备份原始设备树（官方标准流程）
+          # 若官方路径仍未找到，全量搜索（兜底，适配所有异常情况）
+          if [ ! -f "${{ env.OFFICIAL_DTS_DIR }}/rk3328.dtsi" ]; then
+            echo "🔍 全量搜索RK3328设备树文件"
+            OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
+            # 若仍未找到，直接报错（说明源码下载不完整）
+            if [ -z "$OFFICIAL_DTS_DIR" ]; then
+              echo "❌ 未找到RK3328设备树！请确认download-tool下载成功（官方DEVICE参数错误）"
+              exit 1
+            fi
+            echo "✅ 全量搜索找到设备树目录：$OFFICIAL_DTS_DIR"
+            echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
+          fi
+
+      - name: 🔴 生成官方标准补丁（替代直接替换，官方推荐）
+        run: |
+          # 1. 备份官方设备树（官方标准流程，便于回滚）
           mkdir -p backup/devicetree
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dts backup/devicetree/
           cp -r "${{ env.OFFICIAL_DTS_DIR }}"/rk3328*.dtsi backup/devicetree/
-          echo "✅ 已备份官方设备树到 backup/devicetree"
+          echo "✅ 备份官方RK3328设备树完成"
 
-          # 2. 生成补丁文件（核心改进：使用官方补丁机制）
-          # 确保自定义设备树文件存在
+          # 2. 校验自定义设备树是否存在（避免文件缺失）
           if [ ! -f "${{ env.DTS_MAIN }}" ] || [ ! -f "${{ env.DTS_INCLUDE }}" ]; then
-            echo "❌ 未找到自定义设备树文件！请确认文件在仓库根目录"
+            echo "❌ 未找到自定义设备树！请确认文件在仓库根目录"
             exit 1
           fi
 
-          # 3. 创建临时目录存放补丁
+          # 3. 生成标准diff补丁（严格遵循官方补丁格式）
           mkdir -p tmp-patch
-          
-          # 4. 将官方设备树复制到临时目录（用于生成diff）
+          # 复制官方设备树到临时目录（用于生成diff）
           cp "${{ env.OFFICIAL_DTS_DIR }}"/rk3328.dts tmp-patch/
           cp "${{ env.OFFICIAL_DTS_DIR }}"/rk3328.dtsi tmp-patch/
-          
-          # 5. 替换为自定义设备树并生成补丁
+          # 替换为自定义设备树
           cp "${{ env.DTS_MAIN }}" tmp-patch/rk3328.dts
           cp "${{ env.DTS_INCLUDE }}" tmp-patch/rk3328.dtsi
-          
-          # 6. 生成标准格式补丁（含完整头部信息）
+
+          # 生成官方兼容的补丁文件（带完整提交信息，编译时自动应用）
           cd tmp-patch
           git init
           git add .
-          git commit -m "Update RK3328 device tree for L1Pro 1296MHz"
-          # 生成带编号的标准补丁（官方推荐格式）
-          git format-patch -o ../${{ env.PATCH_DIR }} HEAD^
+          git commit -m "RK3328: Update device tree for L1Pro 1296MHz"
+          git format-patch -o ../${{ env.PATCH_DIR }} HEAD^  # 补丁输出到官方目录
           cd ..
-          rm -rf tmp-patch
-          
-          echo "✅ 已生成设备树补丁：${{ env.PATCH_DIR }}/0001-Update-RK3328-device-tree-for-L1Pro-1296MHz.patch"
+          rm -rf tmp-patch  # 清理临时文件
 
-      - name: 🔴 清除旧编译产物（确保使用新补丁）
+          echo "✅ 生成官方标准补丁：$(ls ${{ env.PATCH_DIR }}/*.patch)"
+
+      - name: 🔴 清理旧编译产物（确保补丁生效，官方必做步骤）
         run: |
-          # 清除旧的linux编译产物（确保应用补丁）
+          # 清理linux内核旧编译产物（避免补丁不生效）
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} scripts/clean linux
-          # 清除临时目录
+          # 清理临时目录（释放空间）
           rm -rf "$TEMP_DIR"
           mkdir -p "$TEMP_DIR"
 
-      - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，适配6.6内核）
+      - name: 🔴 官方标准编译（严格对照官方命令，无自定义参数）
         run: |
-          # 单行编译命令（无YAML语法错误，适配6.6内核）
+          # 单行编译命令（无YAML语法错误，官方推荐参数）
           PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
-      - name: 验证编译产物
+      - name: 验证编译产物（官方标准输出目录）
         run: |
-          echo "📁 编译产物目录（target）："
+          echo "📁 查看官方编译产物目录（target）"
           ls -l target/
-          # 查找镜像文件（.img.gz 或 .img）
+          # 查找镜像文件（官方默认输出.img.gz格式）
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
-            echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
+            echo "✅ 编译成功！RK3328镜像路径：$IMAGE_FILE"
             du -sh "$IMAGE_FILE"
           else
-            echo "❌ 未找到编译镜像！查看 build.log 排查错误"
+            echo "❌ 未找到编译镜像！查看build.log排查（优先看补丁/设备树报错）"
             exit 1
           fi
 
-      - name: 上传编译镜像（保存30天）
+      - name: 上传产物（镜像+日志+补丁，便于调试）
         uses: actions/upload-artifact@v4
         with:
-          name: librelec-rk3328-l1pro-1296mhz-${{ github.event.inputs.libreelec_version }}
+          name: librelec-rk3328-l1pro-${{ github.event.inputs.librelec_version }}
           path: |
             target/*.img.gz
             target/*.img
-            build.log  # 同时上传编译日志，方便调试
+            build.log
+            ${{ env.PATCH_DIR }}/*.patch
+            backup/devicetree/
           retention-days: 30
           if-no-files-found: error
-
-      - name: 上传设备树备份和补丁（便于回滚和分享）
-        uses: actions/upload-artifact@v4
-        with:
-          name: devicetree-patch-backup
-          path: |
-            backup/devicetree/
-            ${{ env.PATCH_DIR }}/*.patch
-          retention-days: 7
