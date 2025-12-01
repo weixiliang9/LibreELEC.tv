@@ -1,4 +1,4 @@
-name: RK3328 自动编译 - 官方补丁
+name: RK3328 自动编译
 on:
   workflow_dispatch:
     inputs:
