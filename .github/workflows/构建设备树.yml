@@ -1,10 +1,11 @@
 name: 编译DTS到DTB并上传Release
-on: workflow_dispatch
-  inputs:
-    release-tag:
-      description: 'Release标签（如v1.0.0）'
-      required: false
-      default: ''
+on:
+  workflow_dispatch:  # 冒号后换行，inputs 缩进作为子节点
+    inputs:
+      release-tag:
+        description: 'Release标签（如v1.0.0）'
+        required: false
+        default: ''
 
 jobs:
   compile:
@@ -23,7 +24,11 @@ jobs:
           DTS="rk3328-l1pro-1296mhz.dts"
           DTB="${DTS%.dts}.dtb"
           
-          # 编译（直接用系统dtc，已验证可用）
+          # 验证文件存在
+          [ ! -f "$DTS" ] && echo "❌ 找不到DTS文件: $DTS" && exit 1
+          [ ! -f "rk3328.dtsi" ] && echo "❌ 找不到DTSI文件: rk3328.dtsi" && exit 1
+          
+          # 编译（与手动执行逻辑完全一致）
           dtc -I dts -O dtb -o "$DTB" "$DTS" -i ./ -v
           echo "dtb_file=$DTB" >> $GITHUB_ENV
 
@@ -33,3 +38,9 @@ jobs:
           tag_name: ${{ github.event.inputs.release-tag || github.sha }}
           name: RK3328-L1Pro-DTB-${{ github.event.inputs.release-tag || github.sha }}
           files: ${{ env.dtb_file }}
+          body: |
+            ## RK3328-L1Pro 设备树编译产物
+            - 编译工具：系统dtc（已验证兼容）
+            - DTS源码：rk3328-l1pro-1296mhz.dts
+            - 依赖头文件：rk3328.dtsi
+          overwrite: true
