@@ -43,8 +43,7 @@ jobs:
       DTS_MAIN: rk3328-l1pro-1296mhz.dts  # 你的主设备树文件
       DTS_INCLUDE: rk3328.dtsi            # 你的设备树头文件
       CACHE_KEY: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328  # 你的缓存KEY
-      # 🔴 关键修复：LibreELEC 12.0 官方RK3328设备树正确路径（重点！）
-      OFFICIAL_DTS_DIR: projects/Rockchip/device-tree/rk3328
+      OFFICIAL_DTS_DIR: projects/Rockchip/device-tree/rk3328  # 12.0 正确设备树目录
 
     steps:
       - name: 拉取你Fork的LibreELEC仓库（含自定义设备树）
@@ -56,7 +55,6 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y bc curl git rsync unzip xz-utils zip
-          # RK3328交叉编译+设备树编译依赖
           sudo apt install -y gcc-aarch64-linux-gnu make meson ninja-build patch device-tree-compiler
 
       - name: 切换到指定版本（与缓存一致）
@@ -66,7 +64,6 @@ jobs:
 
       - name: 🔴 备份并替换官方设备树（核心修复，适配12.0目录）
         run: |
-          # 1. 验证官方设备树目录是否存在（调试用）
           if [ -d "${{ env.OFFICIAL_DTS_DIR }}" ]; then
             echo "✅ 找到官方RK3328设备树目录：${{ env.OFFICIAL_DTS_DIR }}"
           else
@@ -74,18 +71,15 @@ jobs:
             exit 1
           fi
 
-          # 2. 备份官方RK3328设备树（避免替换错误无法回滚）
           mkdir -p backup/devicetree
           cp -r ${{ env.OFFICIAL_DTS_DIR }}/*.dts backup/devicetree/
           cp -r ${{ env.OFFICIAL_DTS_DIR }}/*.dtsi backup/devicetree/
           echo "✅ 已备份官方设备树到 backup/devicetree"
 
-          # 3. 复制你的自定义设备树到官方目录（覆盖官方文件，核心移植步骤）
           if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
             cp ${{ env.DTS_MAIN }} ${{ env.OFFICIAL_DTS_DIR }}/
             cp ${{ env.DTS_INCLUDE }} ${{ env.OFFICIAL_DTS_DIR }}/
             echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            # 验证替换结果（查看目录下的设备树文件）
             ls -l ${{ env.OFFICIAL_DTS_DIR }}/*.dts
             ls -l ${{ env.OFFICIAL_DTS_DIR }}/*.dtsi
           else
@@ -106,27 +100,20 @@ jobs:
         run: |
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
             echo "✅ 缓存命中！将复用已下载的源码和工具链"
-            du -sh ./sources  # 查看缓存大小
+            du -sh ./sources
           else
             echo "⚠️  缓存未命中！将重新下载源码（可能耗时较长）"
-            # 若缓存未命中，可手动触发之前的「下载源码」工作流先缓存
           fi
 
       - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz，优化空间和稳定性）
         run: |
-          # 核心编译命令：指定项目、设备、架构、临时目录，限制线程避免溢出
-          PROJECT=${{ github.event.inputs.project }} \
-          DEVICE=${{ github.event.inputs.rockchip_device }} \
-          ARCH=${{ github.event.inputs.arch }} \
-          TMPDIR=${{ env.TEMP_DIR }} \
-          MAKEFLAGS="-j2" \  # 限制2线程，平衡速度和稳定性（ubuntu-latest推荐）
-          make image 2>&1 | tee build.log  # 保存编译日志，方便排查错误
+          # 🔴 语法修正：去掉反斜杠，用单行或规范换行（YAML不支持末尾反斜杠缩进）
+          PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
       - name: 验证编译产物
         run: |
           echo "📁 编译产物目录（target）："
           ls -l target/
-          # 查找镜像文件（.img.gz 或 .img）
           IMAGE_FILE=$(find target -name "*.img.gz" -o -name "*.img" | head -1)
           if [ -n "$IMAGE_FILE" ]; then
             echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
@@ -143,32 +130,7 @@ jobs:
           path: |
             target/*.img.gz
             target/*.img
-            build.log  # 同时上传编译日志，方便调试
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: 上传设备树备份（可选，便于回滚）
-        uses: actions/upload-artifact@v4
-        with:
-          name: devicetree-backup
-          path: backup/devicetree/
-          retention-days: 7
-          if [ -n "$IMAGE_FILE" ]; then
-            echo "✅ 编译成功！镜像路径：$IMAGE_FILE"
-            du -sh "$IMAGE_FILE"
-          else
-            echo "❌ 未找到编译镜像！查看 build.log 排查错误"
-            exit 1
-          fi
-
-      - name: 上传编译镜像（供下载烧录，保存30天）
-        uses: actions/upload-artifact@v4
-        with:
-          name: librelec-rk3328-l1pro-1296mhz-${{ github.event.inputs.librelec_version }}
-          path: |
-            target/*.img.gz
-            target/*.img
-            build.log  # 同时上传编译日志，方便调试
+            build.log
           retention-days: 30
           if-no-files-found: error
 
