@@ -7,7 +7,6 @@ on:
         description: 'Release tag name (e.g., v1.0.0)'
         required: false
         default: ''
-      # 新增：允许手动选择是否重新保存缓存（首次执行或缓存丢失时使用）
       rebuild-cache:
         description: 'Rebuild and save cache (use when cache is missing)'
         required: true
@@ -17,9 +16,9 @@ on:
 jobs:
   compile-and-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # 延长超时（首次下载源码耗时久）
+    timeout-minutes: 60
     permissions:
-      contents: write  # 确保Release和缓存权限
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -33,7 +32,6 @@ jobs:
         id: cache-restore
         with:
           key: librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
-          # 确保缓存路径覆盖LibreELEC源码核心目录（根据实际情况调整）
           path: |
             ./sources
             ./build
@@ -41,28 +39,27 @@ jobs:
             ./toolchain
             ./distributions
             ./packages
-          fail-on-cache-miss: false  # 关键：缓存未命中时不失败，继续执行后续步骤
+          fail-on-cache-miss: false
           restore-keys: |
             librelec-sources-libreelec-12.0-Rockchip-aarch64-RK3328
 
-      - name: Log cache status
+      - name: Log cache status & set cache-info
+        id: cache-info
         run: |
           echo "✅ 缓存恢复状态: ${{ steps.cache-restore.outputs.cache-hit }}"
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
-            echo "✅ 缓存命中！使用缓存的源码"
-            # 验证缓存的目录是否存在
+            echo "cache_status=已使用缓存" >> $GITHUB_OUTPUT
             ls -l ./projects/Rockchip || echo "⚠️ 缓存中未找到Rockchip项目目录"
           else
+            echo "cache_status=首次下载源码" >> $GITHUB_OUTPUT
             echo "⚠️ 缓存未命中！将自动下载LibreELEC 12.0 RK3328源码"
           fi
 
       - name: Install dependencies (Full Set)
         run: |
           set -x
-          # 换阿里云源（解决Ubuntu默认源下载慢/失败问题）
           sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           sudo apt-get update -y
-          # 安装LibreELEC构建必需的所有依赖
           sudo apt-get install -y build-essential bison flex python3 python3-pip \
             git curl wget unzip tar libssl-dev liblz4-dev libzstd-dev
 
@@ -71,9 +68,7 @@ jobs:
         if: steps.cache-restore.outputs.cache-hit != 'true'
         run: |
           set -x
-          # 使用LibreELEC官方脚本初始化RK3328项目（自动下载内核+依赖源码）
           PROJECT=Rockchip DEVICE=RK3328 ARCH=aarch64 ./scripts/build prepare
-          # 验证下载结果
           LINUX_DIR=$(find ./projects/Rockchip -path "*/linux-*" -type d | head -n 1)
           if [ -z "$LINUX_DIR" ]; then
             echo "❌ 源码下载失败！未找到Linux内核目录"
@@ -85,20 +80,17 @@ jobs:
         id: build-dtc
         run: |
           set -x
-          # 精准查找RK3328内核目录（兼容缓存/下载两种场景）
           LINUX_DIR=$(find ./projects/Rockchip -maxdepth 4 -name "linux-*" -type d | head -n 1)
           if [ -z "$LINUX_DIR" ]; then
             echo "❌ 未找到RK3328 Linux内核目录！"
-            ls -l ./projects/Rockchip  # 输出目录结构供排查
+            ls -l ./projects/Rockchip
             exit 1
           fi
           echo "✅ 内核目录: $LINUX_DIR"
 
-          # 构建dtc（增加V=1输出详细日志，方便排查编译失败）
           make -C "$LINUX_DIR" scripts/dtc V=1 -j$(nproc)
           DTC_PATH="$LINUX_DIR/scripts/dtc/dtc"
 
-          # 验证dtc是否可用
           if [ ! -x "$DTC_PATH" ]; then
             echo "❌ DTC构建失败！查看dtc目录内容："
             ls -l "$LINUX_DIR/scripts/dtc/"
@@ -115,11 +107,9 @@ jobs:
           DTSI_FILE="rk3328.dtsi"
           DTB_FILE="${DTS_FILE%.dts}.dtb"
 
-          # 验证DTS/DTSI存在
           [ ! -f "$DTS_FILE" ] && echo "❌ 找不到DTS文件: $DTS_FILE" && exit 1
           [ ! -f "$DTSI_FILE" ] && echo "❌ 找不到DTSI文件: $DTSI_FILE" && exit 1
 
-          # 编译（保留-i ./确保DTSI能被找到，增加-v输出详细信息）
           ${{ env.dtc_path }} -I dts -O dtb -o "$DTB_FILE" "$DTS_FILE" -i ./ -v
           echo "dtb_file=$DTB_FILE" >> $GITHUB_ENV
           echo "✅ DTB编译成功: $DTB_FILE"
@@ -136,7 +126,7 @@ jobs:
             - DTS源码：`rk3328-l1pro-1296mhz.dts`
             - 依赖头文件：`rk3328.dtsi`
             - 编译工具：LibreELEC 12.0 RK3328 内核自带DTC
-            - 缓存状态：${{ steps.cache-restore.outputs.cache-hit == 'true' ? '已使用缓存' : '首次下载源码' }}
+            - 缓存状态：${{ steps.cache-info.outputs.cache_status }}  # 引用步骤输出，避免三元运算符
           overwrite: true
 
       - name: Save cache (if enabled)
