@@ -1,5 +1,4 @@
 name: RK3328 自动编译 - 适配 L1Pro (1296MHz)
-
 on:
   workflow_dispatch:
     inputs:
@@ -66,53 +65,53 @@ jobs:
         with:
           path: ./sources
           key: ${{ env.CACHE_KEY }}
-          restore-keys: |
-            ${{ env.CACHE_KEY }}
+          restore-keys:
+            - ${{ env.CACHE_KEY }}
         id: cache-restore
 
       - name: 🔴 自动搜索RK3328设备树目录（终极解决方案）
         run: |
-          if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
+          if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
             echo "✅ 缓存命中！复用已下载的源码和设备树（大小：$(du -sh ./sources | cut -f1)）"
             OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
             if [ -n "$OFFICIAL_DTS_DIR" ]; then
               echo "✅ 自动找到RK3328设备树目录：$OFFICIAL_DTS_DIR"
-              echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
-              ls -l $OFFICIAL_DTS_DIR/rk3328*.dts
-              ls -l $OFFICIAL_DTS_DIR/rk3328*.dtsi
+              echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> "$GITHUB_ENV"
+              ls -l "$OFFICIAL_DTS_DIR"/rk3328*.dts
+              ls -l "$OFFICIAL_DTS_DIR"/rk3328*.dtsi
             else
               echo "❌ 未找到RK3328设备树！重新下载源码"
               PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
               OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
-              if [ -z "$OFFICIAL_DTS_DIR" ]; then exit 1; fi
-              echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
+              [ -z "$OFFICIAL_DTS_DIR" ] && exit 1
+              echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> "$GITHUB_ENV"
             fi
           else
             echo "⚠️  缓存未命中！自动下载源码"
             PROJECT=${{ github.event.inputs.project }} ARCH=${{ github.event.inputs.arch }} DEVICE=${{ github.event.inputs.rockchip_device }} tools/download-tool
             OFFICIAL_DTS_DIR=$(find ./sources -name "rk3328.dtsi" -type f | xargs dirname | head -1)
-            echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> $GITHUB_ENV
+            echo "OFFICIAL_DTS_DIR=$OFFICIAL_DTS_DIR" >> "$GITHUB_ENV"
             echo "✅ 源码下载完成，设备树目录：$OFFICIAL_DTS_DIR"
           fi
 
-      # 🔴 精准修正第145行及附近语法（核心修复：嵌套命令缩进+if闭合+路径引用）
+      # 🔴 彻底修复Line149报错（核心：规范引号+缩进+命令格式）
       - name: 🔴 备份并替换设备树（核心移植步骤）
         run: |
-          # 1. 读取自动找到的设备树目录（避免变量引用错误）
+          # 读取设备树目录（规范变量引用，避免YAML误解）
           OFFICIAL_DTS_DIR="${{ env.OFFICIAL_DTS_DIR }}"
-          # 2. 创建备份目录（避免mkdir报错）
+          # 创建备份目录
           mkdir -p backup/devicetree
-          # 3. 备份官方设备树（规范cp命令，避免通配符错误）
-          cp -r "${OFFICIAL_DTS_DIR}/rk3328"*.dts backup/devicetree/
-          cp -r "${OFFICIAL_DTS_DIR}/rk3328"*.dtsi backup/devicetree/
+          # 备份官方设备树（✅ Line149核心修复：完整引号包裹路径，无拆分）
+          cp -r "$OFFICIAL_DTS_DIR"/rk3328*.dts backup/devicetree/
+          cp -r "$OFFICIAL_DTS_DIR"/rk3328*.dtsi backup/devicetree/
           echo "✅ 已备份官方RK3328设备树"
-          # 4. 校验并替换自定义设备树（规范if条件，避免嵌套错误）
+          # 替换自定义设备树（规范if条件，无嵌套错误）
           if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
-            cp "${{ env.DTS_MAIN }}" "${OFFICIAL_DTS_DIR}/"
-            cp "${{ env.DTS_INCLUDE }}" "${OFFICIAL_DTS_DIR}/"
+            cp "${{ env.DTS_MAIN }}" "$OFFICIAL_DTS_DIR"/
+            cp "${{ env.DTS_INCLUDE }}" "$OFFICIAL_DTS_DIR"/
             echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            ls -l "${OFFICIAL_DTS_DIR}/${{ env.DTS_MAIN }}"
-            ls -l "${OFFICIAL_DTS_DIR}/${{ env.DTS_INCLUDE }}"
+            ls -l "$OFFICIAL_DTS_DIR"/"${{ env.DTS_MAIN }}"
+            ls -l "$OFFICIAL_DTS_DIR"/"${{ env.DTS_INCLUDE }}"
           else
             echo "❌ 未找到自定义设备树文件！请确认文件在仓库根目录"
             exit 1
@@ -121,8 +120,8 @@ jobs:
       - name: 🔴 设备树语法预校验（提前规避编译报错）
         run: |
           OFFICIAL_DTS_DIR="${{ env.OFFICIAL_DTS_DIR }}"
-          dtc -I dts -O dtb -o /dev/null "${OFFICIAL_DTS_DIR}/${{ env.DTS_MAIN }}"
-          dtc -I dts -O dtb -o /dev/null "${OFFICIAL_DTS_DIR}/${{ env.DTS_INCLUDE }}"
+          dtc -I dts -O dtb -o /dev/null "$OFFICIAL_DTS_DIR"/"${{ env.DTS_MAIN }}"
+          dtc -I dts -O dtb -o /dev/null "$OFFICIAL_DTS_DIR"/"${{ env.DTS_INCLUDE }}"
           echo "✅ 自定义设备树语法校验通过"
 
       - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz）
