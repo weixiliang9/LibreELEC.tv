@@ -95,19 +95,24 @@ jobs:
             echo "✅ 源码下载完成，设备树目录：$OFFICIAL_DTS_DIR"
           fi
 
+      # 🔴 精准修正第145行及附近语法（核心修复：嵌套命令缩进+if闭合+路径引用）
       - name: 🔴 备份并替换设备树（核心移植步骤）
         run: |
-          OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
+          # 1. 读取自动找到的设备树目录（避免变量引用错误）
+          OFFICIAL_DTS_DIR="${{ env.OFFICIAL_DTS_DIR }}"
+          # 2. 创建备份目录（避免mkdir报错）
           mkdir -p backup/devicetree
-          cp -r $OFFICIAL_DTS_DIR/rk3328*.dts backup/devicetree/
-          cp -r $OFFICIAL_DTS_DIR/rk3328*.dtsi backup/devicetree/
+          # 3. 备份官方设备树（规范cp命令，避免通配符错误）
+          cp -r "${OFFICIAL_DTS_DIR}/rk3328"*.dts backup/devicetree/
+          cp -r "${OFFICIAL_DTS_DIR}/rk3328"*.dtsi backup/devicetree/
           echo "✅ 已备份官方RK3328设备树"
+          # 4. 校验并替换自定义设备树（规范if条件，避免嵌套错误）
           if [ -f "${{ env.DTS_MAIN }}" ] && [ -f "${{ env.DTS_INCLUDE }}" ]; then
-            cp ${{ env.DTS_MAIN }} $OFFICIAL_DTS_DIR/
-            cp ${{ env.DTS_INCLUDE }} $OFFICIAL_DTS_DIR/
+            cp "${{ env.DTS_MAIN }}" "${OFFICIAL_DTS_DIR}/"
+            cp "${{ env.DTS_INCLUDE }}" "${OFFICIAL_DTS_DIR}/"
             echo "✅ 已替换设备树：${{ env.DTS_MAIN }} + ${{ env.DTS_INCLUDE }}"
-            ls -l $OFFICIAL_DTS_DIR/${{ env.DTS_MAIN }}
-            ls -l $OFFICIAL_DTS_DIR/${{ env.DTS_INCLUDE }}
+            ls -l "${OFFICIAL_DTS_DIR}/${{ env.DTS_MAIN }}"
+            ls -l "${OFFICIAL_DTS_DIR}/${{ env.DTS_INCLUDE }}"
           else
             echo "❌ 未找到自定义设备树文件！请确认文件在仓库根目录"
             exit 1
@@ -115,12 +120,11 @@ jobs:
 
       - name: 🔴 设备树语法预校验（提前规避编译报错）
         run: |
-          OFFICIAL_DTS_DIR=${{ env.OFFICIAL_DTS_DIR }}
-          dtc -I dts -O dtb -o /dev/null $OFFICIAL_DTS_DIR/${{ env.DTS_MAIN }}
-          dtc -I dts -O dtb -o /dev/null $OFFICIAL_DTS_DIR/${{ env.DTS_INCLUDE }}
+          OFFICIAL_DTS_DIR="${{ env.OFFICIAL_DTS_DIR }}"
+          dtc -I dts -O dtb -o /dev/null "${OFFICIAL_DTS_DIR}/${{ env.DTS_MAIN }}"
+          dtc -I dts -O dtb -o /dev/null "${OFFICIAL_DTS_DIR}/${{ env.DTS_INCLUDE }}"
           echo "✅ 自定义设备树语法校验通过"
 
-      # 🔴 语法修正核心（第179行附近，之前报错位置）
       - name: 🔴 基础编译（RK3328 + L1Pro + 1296MHz）
         run: PROJECT=${{ github.event.inputs.project }} DEVICE=${{ github.event.inputs.rockchip_device }} ARCH=${{ github.event.inputs.arch }} TMPDIR=${{ env.TEMP_DIR }} MAKEFLAGS="-j2" make image 2>&1 | tee build.log
 
@@ -154,4 +158,3 @@ jobs:
           name: devicetree-backup
           path: backup/devicetree/
           retention-days: 7
-          
